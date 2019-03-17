@@ -338,6 +338,7 @@ impl<'a> fmt::Display for Html<'a> {
                         "freebsd" => "FreeBSD",
                         "fuchsia" => "Fuchsia",
                         "haiku" => "Haiku",
+                        "hermit" => "HermitCore",
                         "ios" => "iOS",
                         "l4re" => "L4Re",
                         "linux" => "Linux",

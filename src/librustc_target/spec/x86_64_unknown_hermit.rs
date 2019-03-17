@@ -3,9 +3,10 @@ use crate::spec::{LinkerFlavor, Target, TargetResult};
 pub fn target() -> TargetResult {
     let mut base = super::hermit_base::opts();
     base.cpu = "x86-64".to_string();
-    base.pre_link_args.get_mut(&LinkerFlavor::Gcc).unwrap().push("-m64".to_string());
-    base.linker = Some("x86_64-hermit-gcc".to_string());
     base.max_atomic_width = Some(64);
+    base.pre_link_args.get_mut(&LinkerFlavor::Gcc).unwrap().push("-m64".to_string());
+    base.max_atomic_width = Some(64);
+    base.linker = Some("x86_64-hermit-gcc".to_string());
 
     Ok(Target {
         llvm_target: "x86_64-unknown-hermit".to_string(),

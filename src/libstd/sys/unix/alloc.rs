@@ -48,7 +48,6 @@ unsafe impl GlobalAlloc for System {
 }
 
 #[cfg(any(target_os = "android",
-          target_os = "hermit",
           target_os = "redox",
           target_os = "solaris"))]
 #[inline]
@@ -74,7 +73,6 @@ unsafe fn aligned_malloc(layout: &Layout) -> *mut u8 {
 }
 
 #[cfg(not(any(target_os = "android",
-              target_os = "hermit",
               target_os = "redox",
               target_os = "solaris")))]
 #[inline]

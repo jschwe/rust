@@ -37,7 +37,6 @@ extern {
                    target_os = "netbsd",
                    target_os = "openbsd",
                    target_os = "android",
-                   target_os = "hermit",
                    target_env = "newlib"),
                link_name = "__errno")]
     #[cfg_attr(target_os = "solaris", link_name = "___errno")]
@@ -383,7 +382,7 @@ pub fn current_exe() -> io::Result<PathBuf> {
     }
 }
 
-#[cfg(any(target_os = "fuchsia", target_os = "l4re", target_os = "hermit"))]
+#[cfg(any(target_os = "fuchsia", target_os = "l4re"))]
 pub fn current_exe() -> io::Result<PathBuf> {
     use crate::io::ErrorKind;
     Err(io::Error::new(ErrorKind::Other, "Not yet implemented!"))

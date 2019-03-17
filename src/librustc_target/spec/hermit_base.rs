@@ -8,18 +8,19 @@ pub fn opts() -> TargetOptions {
         "-Wl,--no-dynamic-linker".to_string(),
         "-Wl,--gc-sections".to_string(),
         "-Wl,--as-needed".to_string(),
+        "-nostartfiles".to_string()
     ]);
 
     TargetOptions {
         executables: true,
         has_elf_tls: true,
         linker_is_gnu: true,
-        no_default_libraries: false,
+        no_default_libraries: true,
         panic_strategy: PanicStrategy::Abort,
         position_independent_executables: false,
         pre_link_args: args,
         relocation_model: "static".to_string(),
-        target_family: Some("unix".to_string()),
+        target_family: None,
         tls_model: "local-exec".to_string(),
         .. Default::default()
     }

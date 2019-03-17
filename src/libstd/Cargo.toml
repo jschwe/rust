@@ -18,15 +18,18 @@ alloc = { path = "../liballoc" }
 panic_unwind = { path = "../libpanic_unwind", optional = true }
 panic_abort = { path = "../libpanic_abort" }
 core = { path = "../libcore" }
-libc = { version = "0.2.44", default-features = false, features = ['rustc-dep-of-std'] }
+libc = { version = "0.2.50", default-features = false, features = ['rustc-dep-of-std'] }
 compiler_builtins = { version = "0.1.1" }
 profiler_builtins = { path = "../libprofiler_builtins", optional = true }
 unwind = { path = "../libunwind" }
 rustc-demangle = { version = "0.1.10", features = ['rustc-dep-of-std'] }
-backtrace-sys = { version = "0.1.24", features = ["rustc-dep-of-std"], optional = true }
+backtrace-sys = { version = "0.1.27", features = ["rustc-dep-of-std"], optional = true }
 
 [dev-dependencies]
 rand = "0.6.1"
+
+[target.'cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), target_os = "hermit"))'.dependencies]
+hermit = { path = "../libhermit", features = ['rustc-dep-of-std'] }
 
 [target.x86_64-apple-darwin.dependencies]
 rustc_asan = { path = "../librustc_asan" }
