@@ -79,3 +79,14 @@ pub fn hashmap_random_keys() -> (u64, u64) {
 #[cfg(not(test))]
 pub fn init() {
 }
+
+#[no_mangle]
+pub extern fn hermit_start() {
+    extern "C" {
+        fn main();
+    }
+
+    unsafe {
+        main();
+    }
+}
