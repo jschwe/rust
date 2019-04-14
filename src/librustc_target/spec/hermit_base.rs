@@ -8,7 +8,7 @@ pub fn opts() -> TargetOptions {
         "-Wl,--no-dynamic-linker".to_string(),
         "-Wl,--gc-sections".to_string(),
         "-Wl,--as-needed".to_string(),
-        "-nostartfiles".to_string()
+        "-nodefaultlibs".to_string()
     ]);
 
     TargetOptions {

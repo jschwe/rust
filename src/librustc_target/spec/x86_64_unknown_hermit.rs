@@ -7,6 +7,8 @@ pub fn target() -> TargetResult {
     base.pre_link_args.get_mut(&LinkerFlavor::Gcc).unwrap().push("-m64".to_string());
     base.max_atomic_width = Some(64);
     base.linker = Some("x86_64-hermit-gcc".to_string());
+    base.features = "-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,+rdrnd,+rdseed".to_string();
+    base.stack_probes = true;
 
     Ok(Target {
         llvm_target: "x86_64-unknown-hermit".to_string(),

@@ -1098,7 +1098,6 @@ dependencies = [
  "compiler_builtins 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "core 0.0.0",
  "hermit-multiboot 0.1.0",
- "lazy_static 1.3.0",
  "spin 0.5.0",
  "x86 0.13.0",
 ]
@@ -1293,15 +1292,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "lazy_static"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
-name = "lazy_static"
-version = "1.3.0"
-dependencies = [
- "compiler_builtins 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "core 0.0.0",
- "spin 0.5.0",
-]
 
 [[package]]
 name = "lazycell"
