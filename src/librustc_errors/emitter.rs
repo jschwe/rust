@@ -6,6 +6,7 @@ use crate::{
     Level, CodeSuggestion, DiagnosticBuilder, SubDiagnostic,
     SuggestionStyle, SourceMapperDyn, DiagnosticId,
 };
+use crate::Level::Error;
 use crate::snippet::{Annotation, AnnotationType, Line, MultilineAnnotation, StyledString, Style};
 use crate::styled_buffer::StyledBuffer;
 
@@ -15,8 +16,34 @@ use std::borrow::Cow;
 use std::io::prelude::*;
 use std::io;
 use std::cmp::{min, Reverse};
-use termcolor::{StandardStream, ColorChoice, ColorSpec, BufferWriter};
+use termcolor::{StandardStream, ColorChoice, ColorSpec, BufferWriter, Ansi};
 use termcolor::{WriteColor, Color, Buffer};
+
+/// Describes the way the content of the `rendered` field of the json output is generated
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HumanReadableErrorType {
+    Default(ColorConfig),
+    Short(ColorConfig),
+}
+
+impl HumanReadableErrorType {
+    /// Returns a (`short`, `color`) tuple
+    pub fn unzip(self) -> (bool, ColorConfig) {
+        match self {
+            HumanReadableErrorType::Default(cc) => (false, cc),
+            HumanReadableErrorType::Short(cc) => (true, cc),
+        }
+    }
+    pub fn new_emitter(
+        self,
+        dst: Box<dyn Write + Send>,
+        source_map: Option<Lrc<SourceMapperDyn>>,
+        teach: bool,
+    ) -> EmitterWriter {
+        let (short, color_config) = self.unzip();
+        EmitterWriter::new(dst, source_map, short, teach, color_config.suggests_using_colors())
+    }
+}
 
 const ANONYMIZED_LINE_NUM: &str = "LL";
 
@@ -72,6 +99,7 @@ impl Emitter for EmitterWriter {
 
         self.fix_multispans_in_std_macros(&mut primary_span,
                                           &mut children,
+                                          &db.level,
                                           db.handler.flags.external_macro_backtrace);
 
         self.emit_messages_default(&db.level,
@@ -102,8 +130,8 @@ pub enum ColorConfig {
 }
 
 impl ColorConfig {
-    fn to_color_choice(&self) -> ColorChoice {
-        match *self {
+    fn to_color_choice(self) -> ColorChoice {
+        match self {
             ColorConfig::Always => {
                 if atty::is(atty::Stream::Stderr) {
                     ColorChoice::Always
@@ -116,6 +144,14 @@ impl ColorConfig {
                 ColorChoice::Auto
             }
             ColorConfig::Auto => ColorChoice::Never,
+        }
+    }
+    fn suggests_using_colors(self) -> bool {
+        match self {
+            | ColorConfig::Always
+            | ColorConfig::Auto
+            => true,
+            ColorConfig::Never => false,
         }
     }
 }
@@ -150,13 +186,15 @@ impl EmitterWriter {
         }
     }
 
-    pub fn new(dst: Box<dyn Write + Send>,
-               source_map: Option<Lrc<SourceMapperDyn>>,
-               short_message: bool,
-               teach: bool)
-               -> EmitterWriter {
+    pub fn new(
+        dst: Box<dyn Write + Send>,
+        source_map: Option<Lrc<SourceMapperDyn>>,
+        short_message: bool,
+        teach: bool,
+        colored: bool,
+    ) -> EmitterWriter {
         EmitterWriter {
-            dst: Raw(dst),
+            dst: Raw(dst, colored),
             sm: source_map,
             short_message,
             teach,
@@ -243,6 +281,7 @@ impl EmitterWriter {
                         end_col: hi.col_display,
                         is_primary: span_label.is_primary,
                         label: span_label.label.clone(),
+                        overlaps_exactly: false,
                     };
                     multiline_annotations.push((lo.file.clone(), ml.clone()));
                     AnnotationType::Multiline(ml)
@@ -258,10 +297,7 @@ impl EmitterWriter {
                 };
 
                 if !ann.is_multiline() {
-                    add_annotation_to_file(&mut output,
-                                           lo.file,
-                                           lo.line,
-                                           ann);
+                    add_annotation_to_file(&mut output, lo.file, lo.line, ann);
                 }
             }
         }
@@ -274,10 +310,12 @@ impl EmitterWriter {
                 let ref mut a = item.1;
                 // Move all other multiline annotations overlapping with this one
                 // one level to the right.
-                if &ann != a &&
+                if !(ann.same_span(a)) &&
                     num_overlap(ann.line_start, ann.line_end, a.line_start, a.line_end, true)
                 {
                     a.increase_depth();
+                } else if ann.same_span(a) && &ann != a {
+                    a.overlaps_exactly = true;
                 } else {
                     break;
                 }
@@ -289,17 +327,49 @@ impl EmitterWriter {
             if ann.depth > max_depth {
                 max_depth = ann.depth;
             }
-            add_annotation_to_file(&mut output, file.clone(), ann.line_start, ann.as_start());
-            let middle = min(ann.line_start + 4, ann.line_end);
-            for line in ann.line_start + 1..middle {
-                add_annotation_to_file(&mut output, file.clone(), line, ann.as_line());
-            }
-            if middle < ann.line_end - 1 {
-                for line in ann.line_end - 1..ann.line_end {
+            let mut end_ann = ann.as_end();
+            if !ann.overlaps_exactly {
+                // avoid output like
+                //
+                //  |        foo(
+                //  |   _____^
+                //  |  |_____|
+                //  | ||         bar,
+                //  | ||     );
+                //  | ||      ^
+                //  | ||______|
+                //  |  |______foo
+                //  |         baz
+                //
+                // and instead get
+                //
+                //  |       foo(
+                //  |  _____^
+                //  | |         bar,
+                //  | |     );
+                //  | |      ^
+                //  | |      |
+                //  | |______foo
+                //  |        baz
+                add_annotation_to_file(&mut output, file.clone(), ann.line_start, ann.as_start());
+                // 4 is the minimum vertical length of a multiline span when presented: two lines
+                // of code and two lines of underline. This is not true for the special case where
+                // the beginning doesn't have an underline, but the current logic seems to be
+                // working correctly.
+                let middle = min(ann.line_start + 4, ann.line_end);
+                for line in ann.line_start + 1..middle {
+                    // Every `|` that joins the beginning of the span (`___^`) to the end (`|__^`).
                     add_annotation_to_file(&mut output, file.clone(), line, ann.as_line());
                 }
+                if middle < ann.line_end - 1 {
+                    for line in ann.line_end - 1..ann.line_end {
+                        add_annotation_to_file(&mut output, file.clone(), line, ann.as_line());
+                    }
+                }
+            } else {
+                end_ann.annotation_type = AnnotationType::Singleline;
             }
-            add_annotation_to_file(&mut output, file, ann.line_end, ann.as_end());
+            add_annotation_to_file(&mut output, file, ann.line_end, end_ann);
         }
         for file_vec in output.iter_mut() {
             file_vec.multiline_depth = max_depth;
@@ -856,18 +926,27 @@ impl EmitterWriter {
     fn fix_multispans_in_std_macros(&mut self,
                                     span: &mut MultiSpan,
                                     children: &mut Vec<SubDiagnostic>,
+                                    level: &Level,
                                     backtrace: bool) {
         let mut spans_updated = self.fix_multispan_in_std_macros(span, backtrace);
         for child in children.iter_mut() {
             spans_updated |= self.fix_multispan_in_std_macros(&mut child.span, backtrace);
         }
+        let msg = if level == &Error {
+            "this error originates in a macro outside of the current crate \
+             (in Nightly builds, run with -Z external-macro-backtrace \
+              for more info)".to_string()
+        } else {
+            "this warning originates in a macro outside of the current crate \
+             (in Nightly builds, run with -Z external-macro-backtrace \
+              for more info)".to_string()
+        };
+
         if spans_updated {
             children.push(SubDiagnostic {
                 level: Level::Note,
                 message: vec![
-                    ("this error originates in a macro outside of the current crate \
-                      (in Nightly builds, run with -Z external-macro-backtrace \
-                       for more info)".to_string(),
+                    (msg,
                      Style::NoStyle),
                 ],
                 span: MultiSpan::new(),
@@ -1495,13 +1574,15 @@ fn emit_to_destination(rendered_buffer: &[Vec<StyledString>],
 pub enum Destination {
     Terminal(StandardStream),
     Buffered(BufferWriter),
-    Raw(Box<dyn Write + Send>),
+    // The bool denotes whether we should be emitting ansi color codes or not
+    Raw(Box<(dyn Write + Send)>, bool),
 }
 
 pub enum WritableDst<'a> {
     Terminal(&'a mut StandardStream),
     Buffered(&'a mut BufferWriter, Buffer),
-    Raw(&'a mut Box<dyn Write + Send>),
+    Raw(&'a mut (dyn Write + Send)),
+    ColoredRaw(Ansi<&'a mut (dyn Write + Send)>),
 }
 
 impl Destination {
@@ -1527,7 +1608,8 @@ impl Destination {
                 let buf = t.buffer();
                 WritableDst::Buffered(t, buf)
             }
-            Destination::Raw(ref mut t) => WritableDst::Raw(t),
+            Destination::Raw(ref mut t, false) => WritableDst::Raw(t),
+            Destination::Raw(ref mut t, true) => WritableDst::ColoredRaw(Ansi::new(t)),
         }
     }
 }
@@ -1585,6 +1667,7 @@ impl<'a> WritableDst<'a> {
         match *self {
             WritableDst::Terminal(ref mut t) => t.set_color(color),
             WritableDst::Buffered(_, ref mut t) => t.set_color(color),
+            WritableDst::ColoredRaw(ref mut t) => t.set_color(color),
             WritableDst::Raw(_) => Ok(())
         }
     }
@@ -1593,6 +1676,7 @@ impl<'a> WritableDst<'a> {
         match *self {
             WritableDst::Terminal(ref mut t) => t.reset(),
             WritableDst::Buffered(_, ref mut t) => t.reset(),
+            WritableDst::ColoredRaw(ref mut t) => t.reset(),
             WritableDst::Raw(_) => Ok(()),
         }
     }
@@ -1604,6 +1688,7 @@ impl<'a> Write for WritableDst<'a> {
             WritableDst::Terminal(ref mut t) => t.write(bytes),
             WritableDst::Buffered(_, ref mut buf) => buf.write(bytes),
             WritableDst::Raw(ref mut w) => w.write(bytes),
+            WritableDst::ColoredRaw(ref mut t) => t.write(bytes),
         }
     }
 
@@ -1612,6 +1697,7 @@ impl<'a> Write for WritableDst<'a> {
             WritableDst::Terminal(ref mut t) => t.flush(),
             WritableDst::Buffered(_, ref mut buf) => buf.flush(),
             WritableDst::Raw(ref mut w) => w.flush(),
+            WritableDst::ColoredRaw(ref mut w) => w.flush(),
         }
     }
 }

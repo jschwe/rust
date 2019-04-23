@@ -4,7 +4,7 @@
 //! We walk the set of items and, for each member, generate new constraints.
 
 use hir::def_id::DefId;
-use rustc::ty::subst::{UnpackedKind, SubstsRef};
+use rustc::ty::subst::{SubstsRef, UnpackedKind};
 use rustc::ty::{self, Ty, TyCtxt};
 use rustc::hir;
 use rustc::hir::itemlikevisit::ItemLikeVisitor;
@@ -74,7 +74,7 @@ impl<'a, 'tcx, 'v> ItemLikeVisitor<'v> for ConstraintContext<'a, 'tcx> {
                 self.visit_node_helper(item.hir_id);
 
                 if let hir::VariantData::Tuple(..) = *struct_def {
-                    self.visit_node_helper(struct_def.hir_id());
+                    self.visit_node_helper(struct_def.ctor_hir_id().unwrap());
                 }
             }
 
@@ -83,7 +83,7 @@ impl<'a, 'tcx, 'v> ItemLikeVisitor<'v> for ConstraintContext<'a, 'tcx> {
 
                 for variant in &enum_def.variants {
                     if let hir::VariantData::Tuple(..) = variant.node.data {
-                        self.visit_node_helper(variant.node.data.hir_id());
+                        self.visit_node_helper(variant.node.data.ctor_hir_id().unwrap());
                     }
                 }
             }
@@ -130,7 +130,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
 
     fn build_constraints_for_item(&mut self, def_id: DefId) {
         let tcx = self.tcx();
-        debug!("build_constraints_for_item({})", tcx.item_path_str(def_id));
+        debug!("build_constraints_for_item({})", tcx.def_path_str(def_id));
 
         // Skip items with no generics - there's nothing to infer in them.
         if tcx.generics_of(def_id).count() == 0 {
@@ -229,12 +229,19 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
 
         // Trait are always invariant so we can take advantage of that.
         let variance_i = self.invariant(variance);
-        for ty in substs.types() {
-            self.add_constraints_from_ty(current, ty, variance_i);
-        }
 
-        for region in substs.regions() {
-            self.add_constraints_from_region(current, region, variance_i);
+        for k in substs {
+            match k.unpack() {
+                UnpackedKind::Lifetime(lt) => {
+                    self.add_constraints_from_region(current, lt, variance_i)
+                }
+                UnpackedKind::Type(ty) => {
+                    self.add_constraints_from_ty(current, ty, variance_i)
+                }
+                UnpackedKind::Const(_) => {
+                    // Consts impose no constraints.
+                }
+            }
         }
     }
 
@@ -267,7 +274,10 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
                 self.add_constraints_from_mt(current, &ty::TypeAndMut { ty, mutbl }, variance);
             }
 
-            ty::Array(typ, _) |
+            ty::Array(typ, _) => {
+                self.add_constraints_from_ty(current, typ, variance);
+            }
+
             ty::Slice(typ) => {
                 self.add_constraints_from_ty(current, typ, variance);
             }
@@ -382,6 +392,9 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
                 }
                 UnpackedKind::Type(ty) => {
                     self.add_constraints_from_ty(current, ty, variance_i)
+                }
+                UnpackedKind::Const(_) => {
+                    // Consts impose no constraints.
                 }
             }
         }

@@ -450,9 +450,10 @@ pub fn noop_visit_foreign_mod<T: MutVisitor>(foreign_mod: &mut ForeignMod, vis: 
 }
 
 pub fn noop_visit_variant<T: MutVisitor>(variant: &mut Variant, vis: &mut T) {
-    let Spanned { node: Variant_ { ident, attrs, data, disr_expr }, span } = variant;
+    let Spanned { node: Variant_ { ident, attrs, id, data, disr_expr }, span } = variant;
     vis.visit_ident(ident);
     visit_attrs(attrs, vis);
+    vis.visit_id(id);
     vis.visit_variant_data(data);
     visit_opt(disr_expr, |disr_expr| vis.visit_anon_const(disr_expr));
     vis.visit_span(span);
@@ -539,16 +540,14 @@ pub fn noop_visit_macro_def<T: MutVisitor>(macro_def: &mut MacroDef, vis: &mut T
 }
 
 pub fn noop_visit_meta_list_item<T: MutVisitor>(li: &mut NestedMetaItem, vis: &mut T) {
-    let Spanned { node, span } = li;
-    match node {
-        NestedMetaItemKind::MetaItem(mi) => vis.visit_meta_item(mi),
-        NestedMetaItemKind::Literal(_lit) => {}
+    match li {
+        NestedMetaItem::MetaItem(mi) => vis.visit_meta_item(mi),
+        NestedMetaItem::Literal(_lit) => {}
     }
-    vis.visit_span(span);
 }
 
 pub fn noop_visit_meta_item<T: MutVisitor>(mi: &mut MetaItem, vis: &mut T) {
-    let MetaItem { ident: _, node, span } = mi;
+    let MetaItem { path: _, node, span } = mi;
     match node {
         MetaItemKind::Word => {}
         MetaItemKind::List(mis) => visit_vec(mis, |mi| vis.visit_meta_list_item(mi)),
@@ -767,11 +766,11 @@ pub fn noop_visit_where_predicate<T: MutVisitor>(pred: &mut WherePredicate, vis:
 
 pub fn noop_visit_variant_data<T: MutVisitor>(vdata: &mut VariantData, vis: &mut T) {
     match vdata {
-        VariantData::Struct(fields, id) |
+        VariantData::Struct(fields, ..) => visit_vec(fields, |field| vis.visit_struct_field(field)),
         VariantData::Tuple(fields, id) => {
             visit_vec(fields, |field| vis.visit_struct_field(field));
             vis.visit_id(id);
-        }
+        },
         VariantData::Unit(id) => vis.visit_id(id),
     }
 }
@@ -1340,4 +1339,3 @@ mod tests {
         })
     }
 }
-

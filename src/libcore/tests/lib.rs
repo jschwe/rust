@@ -1,6 +1,5 @@
 #![feature(box_syntax)]
 #![feature(cell_update)]
-#![feature(copied)]
 #![feature(core_private_bignum)]
 #![feature(core_private_diy_float)]
 #![feature(dec2flt)]
@@ -17,10 +16,9 @@
 #![feature(pattern)]
 #![feature(range_is_empty)]
 #![feature(raw)]
-#![feature(refcell_map_split)]
-#![feature(refcell_replace_swap)]
 #![feature(slice_patterns)]
 #![feature(sort_internals)]
+#![feature(slice_partition_at_index)]
 #![feature(specialization)]
 #![feature(step_trait)]
 #![feature(str_internals)]
@@ -33,10 +31,10 @@
 #![feature(slice_internals)]
 #![feature(slice_partition_dedup)]
 #![feature(copy_within)]
+#![feature(int_error_matching)]
+#![deny(rust_2018_idioms)]
 
-extern crate core;
 extern crate test;
-extern crate rand;
 
 mod any;
 mod array;

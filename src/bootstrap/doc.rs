@@ -277,7 +277,7 @@ impl Step for TheBook {
         builder.ensure(Rustbook {
             target,
             name: INTERNER.intern_string(name.to_string()),
-            version: RustbookVersion::MdBook1,
+            version: RustbookVersion::MdBook2,
         });
 
         // building older edition redirects
@@ -286,21 +286,21 @@ impl Step for TheBook {
         builder.ensure(Rustbook {
             target,
             name: INTERNER.intern_string(source_name),
-            version: RustbookVersion::MdBook1,
+            version: RustbookVersion::MdBook2,
         });
 
         let source_name = format!("{}/second-edition", name);
         builder.ensure(Rustbook {
             target,
             name: INTERNER.intern_string(source_name),
-            version: RustbookVersion::MdBook1,
+            version: RustbookVersion::MdBook2,
         });
 
         let source_name = format!("{}/2018-edition", name);
         builder.ensure(Rustbook {
             target,
             name: INTERNER.intern_string(source_name),
-            version: RustbookVersion::MdBook1,
+            version: RustbookVersion::MdBook2,
         });
 
         // build the version info page and CSS
@@ -331,24 +331,21 @@ fn invoke_rustdoc(
 
     let path = builder.src.join("src/doc").join(markdown);
 
-    let favicon = builder.src.join("src/doc/favicon.inc");
+    let header = builder.src.join("src/doc/redirect.inc");
     let footer = builder.src.join("src/doc/footer.inc");
     let version_info = out.join("version_info.html");
 
-    let mut cmd = builder.rustdoc_cmd(compiler.host);
+    let mut cmd = builder.rustdoc_cmd(compiler);
 
     let out = out.join("book");
 
     cmd.arg("--html-after-content").arg(&footer)
         .arg("--html-before-content").arg(&version_info)
-        .arg("--html-in-header").arg(&favicon)
+        .arg("--html-in-header").arg(&header)
         .arg("--markdown-no-toc")
-        .arg("--markdown-playground-url")
-        .arg("https://play.rust-lang.org/")
-        .arg("-o").arg(&out)
-        .arg(&path)
-        .arg("--markdown-css")
-        .arg("../rust.css");
+        .arg("--markdown-playground-url").arg("https://play.rust-lang.org/")
+        .arg("-o").arg(&out).arg(&path)
+        .arg("--markdown-css").arg("../rust.css");
 
     builder.run(&mut cmd);
 }
@@ -415,7 +412,7 @@ impl Step for Standalone {
             }
 
             let html = out.join(filename).with_extension("html");
-            let rustdoc = builder.rustdoc(compiler.host);
+            let rustdoc = builder.rustdoc(compiler);
             if up_to_date(&path, &html) &&
                up_to_date(&footer, &html) &&
                up_to_date(&favicon, &html) &&
@@ -425,14 +422,13 @@ impl Step for Standalone {
                 continue
             }
 
-            let mut cmd = builder.rustdoc_cmd(compiler.host);
+            let mut cmd = builder.rustdoc_cmd(compiler);
             cmd.arg("--html-after-content").arg(&footer)
                .arg("--html-before-content").arg(&version_info)
                .arg("--html-in-header").arg(&favicon)
                .arg("--markdown-no-toc")
                .arg("--index-page").arg(&builder.src.join("src/doc/index.md"))
-               .arg("--markdown-playground-url")
-               .arg("https://play.rust-lang.org/")
+               .arg("--markdown-playground-url").arg("https://play.rust-lang.org/")
                .arg("-o").arg(&out)
                .arg(&path);
 
@@ -523,6 +519,7 @@ impl Step for Std {
                  .arg("--markdown-css").arg("rust.css")
                  .arg("--markdown-no-toc")
                  .arg("--generate-redirect-pages")
+                 .arg("--resource-suffix").arg(crate::channel::CFG_RELEASE_NUM)
                  .arg("--index-page").arg(&builder.src.join("src/doc/index.md"));
 
             builder.run(&mut cargo);
@@ -589,6 +586,7 @@ impl Step for Test {
 
         cargo.arg("--no-deps")
              .arg("-p").arg("test")
+             .env("RUSTDOC_RESOURCE_SUFFIX", crate::channel::CFG_RELEASE_NUM)
              .env("RUSTDOC_GENERATE_REDIRECT_PAGES", "1");
 
         builder.run(&mut cargo);
@@ -660,6 +658,7 @@ impl Step for WhitelistedRustc {
         // for which docs must be built.
         for krate in &["proc_macro"] {
             cargo.arg("-p").arg(krate)
+                 .env("RUSTDOC_RESOURCE_SUFFIX", crate::channel::CFG_RELEASE_NUM)
                  .env("RUSTDOC_GENERATE_REDIRECT_PAGES", "1");
         }
 
@@ -824,7 +823,7 @@ impl Step for Rustdoc {
         builder.ensure(Rustc { stage, target });
 
         // Build rustdoc.
-        builder.ensure(tool::Rustdoc { host: compiler.host });
+        builder.ensure(tool::Rustdoc { compiler: compiler });
 
         // Symlink compiler docs to the output directory of rustdoc documentation.
         let out_dir = builder.stage_out(compiler, Mode::ToolRustc)
@@ -883,9 +882,14 @@ impl Step for ErrorIndex {
         builder.info(&format!("Documenting error index ({})", target));
         let out = builder.doc_out(target);
         t!(fs::create_dir_all(&out));
-        let mut index = builder.tool_cmd(Tool::ErrorIndex);
+        let compiler = builder.compiler(2, builder.config.build);
+        let mut index = tool::ErrorIndex::command(
+            builder,
+            compiler,
+        );
         index.arg("html");
         index.arg(out.join("error-index.html"));
+        index.arg(crate::channel::CFG_RELEASE_NUM);
 
         // FIXME: shouldn't have to pass this env var
         index.env("CFG_BUILD", &builder.config.build)

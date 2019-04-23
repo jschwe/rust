@@ -46,8 +46,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::sync::{Arc, mpsc};
 
-use parking_lot::Mutex as PlMutex;
-
 mod code_stats;
 pub mod config;
 pub mod filesearch;
@@ -130,7 +128,7 @@ pub struct Session {
     pub profile_channel: Lock<Option<mpsc::Sender<ProfileQueriesMsg>>>,
 
     /// Used by -Z self-profile
-    pub self_profiling: Option<Arc<PlMutex<SelfProfiler>>>,
+    pub self_profiling: Option<Arc<SelfProfiler>>,
 
     /// Some measurements that are being gathered during compilation.
     pub perf_stats: PerfStats,
@@ -164,6 +162,13 @@ pub struct Session {
 
     /// Cap lint level specified by a driver specifically.
     pub driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
+
+    /// `Span`s of trait methods that weren't found to avoid emitting object safety errors
+    pub trait_methods_not_found: Lock<FxHashSet<Span>>,
+
+    /// Mapping from ident span to path span for paths that don't exist as written, but that
+    /// exist under `std`. For example, wrote `str::from_utf8` instead of `std::str::from_utf8`.
+    pub confused_type_with_std_module: Lock<FxHashMap<Span, Span>>,
 }
 
 pub struct PerfStats {
@@ -311,7 +316,7 @@ impl Session {
     pub fn abort_if_errors(&self) {
         self.diagnostic().abort_if_errors();
     }
-    pub fn compile_status(&self) -> Result<(), CompileIncomplete> {
+    pub fn compile_status(&self) -> Result<(), ErrorReported> {
         compile_result_from_err_count(self.err_count())
     }
     pub fn track_errors<F, T>(&self, f: F) -> Result<T, ErrorReported>
@@ -501,6 +506,9 @@ impl Session {
         self.opts.debugging_opts.verbose
     }
     pub fn time_passes(&self) -> bool {
+        self.opts.debugging_opts.time_passes || self.opts.debugging_opts.time
+    }
+    pub fn time_extended(&self) -> bool {
         self.opts.debugging_opts.time_passes
     }
     pub fn profile_queries(&self) -> bool {
@@ -832,19 +840,17 @@ impl Session {
 
     #[inline(never)]
     #[cold]
-    fn profiler_active<F: FnOnce(&mut SelfProfiler) -> ()>(&self, f: F) {
+    fn profiler_active<F: FnOnce(&SelfProfiler) -> ()>(&self, f: F) {
         match &self.self_profiling {
             None => bug!("profiler_active() called but there was no profiler active"),
             Some(profiler) => {
-                let mut p = profiler.lock();
-
-                f(&mut p);
+                f(&profiler);
             }
         }
     }
 
     #[inline(always)]
-    pub fn profiler<F: FnOnce(&mut SelfProfiler) -> ()>(&self, f: F) {
+    pub fn profiler<F: FnOnce(&SelfProfiler) -> ()>(&self, f: F) {
         if unlikely!(self.self_profiling.is_some()) {
             self.profiler_active(f)
         }
@@ -1031,39 +1037,42 @@ fn default_emitter(
     emitter_dest: Option<Box<dyn Write + Send>>,
 ) -> Box<dyn Emitter + sync::Send> {
     match (sopts.error_format, emitter_dest) {
-        (config::ErrorOutputType::HumanReadable(color_config), None) => Box::new(
-            EmitterWriter::stderr(
-                color_config,
-                Some(source_map.clone()),
-                false,
-                sopts.debugging_opts.teach,
-            ).ui_testing(sopts.debugging_opts.ui_testing),
-        ),
-        (config::ErrorOutputType::HumanReadable(_), Some(dst)) => Box::new(
-            EmitterWriter::new(dst, Some(source_map.clone()), false, false)
-                .ui_testing(sopts.debugging_opts.ui_testing),
-        ),
-        (config::ErrorOutputType::Json(pretty), None) => Box::new(
+        (config::ErrorOutputType::HumanReadable(kind), dst) => {
+            let (short, color_config) = kind.unzip();
+            let emitter = match dst {
+                None => EmitterWriter::stderr(
+                    color_config,
+                    Some(source_map.clone()),
+                    short,
+                    sopts.debugging_opts.teach,
+                ),
+                Some(dst) => EmitterWriter::new(
+                    dst,
+                    Some(source_map.clone()),
+                    short,
+                    false, // no teach messages when writing to a buffer
+                    false, // no colors when writing to a buffer
+                ),
+            };
+            Box::new(emitter.ui_testing(sopts.debugging_opts.ui_testing))
+        },
+        (config::ErrorOutputType::Json { pretty, json_rendered }, None) => Box::new(
             JsonEmitter::stderr(
                 Some(registry),
                 source_map.clone(),
                 pretty,
+                json_rendered,
             ).ui_testing(sopts.debugging_opts.ui_testing),
         ),
-        (config::ErrorOutputType::Json(pretty), Some(dst)) => Box::new(
+        (config::ErrorOutputType::Json { pretty, json_rendered }, Some(dst)) => Box::new(
             JsonEmitter::new(
                 dst,
                 Some(registry),
                 source_map.clone(),
                 pretty,
+                json_rendered,
             ).ui_testing(sopts.debugging_opts.ui_testing),
         ),
-        (config::ErrorOutputType::Short(color_config), None) => Box::new(
-            EmitterWriter::stderr(color_config, Some(source_map.clone()), true, false),
-        ),
-        (config::ErrorOutputType::Short(_), Some(dst)) => {
-            Box::new(EmitterWriter::new(dst, Some(source_map.clone()), true, false))
-        }
     }
 }
 
@@ -1124,7 +1133,7 @@ pub fn build_session_with_source_map(
     build_session_(sopts, local_crate_source_file, diagnostic_handler, source_map, lint_caps)
 }
 
-pub fn build_session_(
+fn build_session_(
     sopts: config::Options,
     local_crate_source_file: Option<PathBuf>,
     span_diagnostic: errors::Handler,
@@ -1132,7 +1141,19 @@ pub fn build_session_(
     driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
 ) -> Session {
     let self_profiler =
-        if sopts.debugging_opts.self_profile { Some(Arc::new(PlMutex::new(SelfProfiler::new()))) }
+        if sopts.debugging_opts.self_profile {
+            let profiler = SelfProfiler::new(&sopts.debugging_opts.self_profile_events);
+            match profiler {
+                Ok(profiler) => {
+                    crate::ty::query::QueryName::register_with_profiler(&profiler);
+                    Some(Arc::new(profiler))
+                },
+                Err(e) => {
+                    early_warn(sopts.error_format, &format!("failed to create profiler: {}", e));
+                    None
+                }
+            }
+        }
         else { None };
 
     let host_triple = TargetTriple::from_triple(config::host_triple());
@@ -1230,6 +1251,8 @@ pub fn build_session_(
         has_global_allocator: Once::new(),
         has_panic_handler: Once::new(),
         driver_lint_caps,
+        trait_methods_not_found: Lock::new(Default::default()),
+        confused_type_with_std_module: Lock::new(Default::default()),
     };
 
     validate_commandline_args_with_session_available(&sess);
@@ -1307,49 +1330,37 @@ pub enum IncrCompSession {
 
 pub fn early_error(output: config::ErrorOutputType, msg: &str) -> ! {
     let emitter: Box<dyn Emitter + sync::Send> = match output {
-        config::ErrorOutputType::HumanReadable(color_config) => {
-            Box::new(EmitterWriter::stderr(color_config, None, false, false))
+        config::ErrorOutputType::HumanReadable(kind) => {
+            let (short, color_config) = kind.unzip();
+            Box::new(EmitterWriter::stderr(color_config, None, short, false))
         }
-        config::ErrorOutputType::Json(pretty) => Box::new(JsonEmitter::basic(pretty)),
-        config::ErrorOutputType::Short(color_config) => {
-            Box::new(EmitterWriter::stderr(color_config, None, true, false))
-        }
+        config::ErrorOutputType::Json { pretty, json_rendered } =>
+            Box::new(JsonEmitter::basic(pretty, json_rendered)),
     };
-    let handler = errors::Handler::with_emitter(true, false, emitter);
+    let handler = errors::Handler::with_emitter(true, None, emitter);
     handler.emit(&MultiSpan::new(), msg, errors::Level::Fatal);
     errors::FatalError.raise();
 }
 
 pub fn early_warn(output: config::ErrorOutputType, msg: &str) {
     let emitter: Box<dyn Emitter + sync::Send> = match output {
-        config::ErrorOutputType::HumanReadable(color_config) => {
-            Box::new(EmitterWriter::stderr(color_config, None, false, false))
+        config::ErrorOutputType::HumanReadable(kind) => {
+            let (short, color_config) = kind.unzip();
+            Box::new(EmitterWriter::stderr(color_config, None, short, false))
         }
-        config::ErrorOutputType::Json(pretty) => Box::new(JsonEmitter::basic(pretty)),
-        config::ErrorOutputType::Short(color_config) => {
-            Box::new(EmitterWriter::stderr(color_config, None, true, false))
-        }
+        config::ErrorOutputType::Json { pretty, json_rendered } =>
+            Box::new(JsonEmitter::basic(pretty, json_rendered)),
     };
-    let handler = errors::Handler::with_emitter(true, false, emitter);
+    let handler = errors::Handler::with_emitter(true, None, emitter);
     handler.emit(&MultiSpan::new(), msg, errors::Level::Warning);
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum CompileIncomplete {
-    Stopped,
-    Errored(ErrorReported),
-}
-impl From<ErrorReported> for CompileIncomplete {
-    fn from(err: ErrorReported) -> CompileIncomplete {
-        CompileIncomplete::Errored(err)
-    }
-}
-pub type CompileResult = Result<(), CompileIncomplete>;
+pub type CompileResult = Result<(), ErrorReported>;
 
 pub fn compile_result_from_err_count(err_count: usize) -> CompileResult {
     if err_count == 0 {
         Ok(())
     } else {
-        Err(CompileIncomplete::Errored(ErrorReported))
+        Err(ErrorReported)
     }
 }

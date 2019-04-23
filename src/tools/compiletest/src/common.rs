@@ -24,7 +24,9 @@ pub enum Mode {
     Incremental,
     RunMake,
     Ui,
+    JsDocTest,
     MirOpt,
+    Assembly,
 }
 
 impl Mode {
@@ -59,7 +61,9 @@ impl FromStr for Mode {
             "incremental" => Ok(Incremental),
             "run-make" => Ok(RunMake),
             "ui" => Ok(Ui),
+            "js-doc-test" => Ok(JsDocTest),
             "mir-opt" => Ok(MirOpt),
+            "assembly" => Ok(Assembly),
             _ => Err(()),
         }
     }
@@ -82,7 +86,9 @@ impl fmt::Display for Mode {
             Incremental => "incremental",
             RunMake => "run-make",
             Ui => "ui",
+            JsDocTest => "js-doc-test",
             MirOpt => "mir-opt",
+            Assembly => "assembly",
         };
         fmt::Display::fmt(s, f)
     }
@@ -111,6 +117,7 @@ impl CompareMode {
     }
 }
 
+/// Configuration for compiletest
 #[derive(Clone)]
 pub struct Config {
     /// `true` to to overwrite stderr/stdout files instead of complaining about changes in output.
@@ -239,6 +246,11 @@ pub struct Config {
     /// mode describing what file the actual ui output will be compared to
     pub compare_mode: Option<CompareMode>,
 
+    /// If true, this will generate a coverage file with UI test files that run `MachineApplicable`
+    /// diagnostics but are missing `run-rustfix` annotations. The generated coverage file is
+    /// created in `/<build_base>/rustfix_missing_coverage.txt`
+    pub rustfix_coverage: bool,
+
     // Configuration for various run-make tests frobbing things like C compilers
     // or querying about various LLVM component information.
     pub cc: String,
@@ -248,6 +260,8 @@ pub struct Config {
     pub linker: Option<String>,
     pub llvm_components: String,
     pub llvm_cxxflags: String,
+
+    /// Path to a NodeJS executable. Used for JS doctests, emscripten and WASM tests
     pub nodejs: Option<String>,
 }
 

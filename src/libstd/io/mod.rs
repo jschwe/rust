@@ -24,9 +24,9 @@
 //!     let mut buffer = [0; 10];
 //!
 //!     // read up to 10 bytes
-//!     f.read(&mut buffer)?;
+//!     let n = f.read(&mut buffer)?;
 //!
-//!     println!("The bytes: {:?}", buffer);
+//!     println!("The bytes: {:?}", &buffer[..n]);
 //!     Ok(())
 //! }
 //! ```
@@ -56,9 +56,9 @@
 //!     f.seek(SeekFrom::End(-10))?;
 //!
 //!     // read up to 10 bytes
-//!     f.read(&mut buffer)?;
+//!     let n = f.read(&mut buffer)?;
 //!
-//!     println!("The bytes: {:?}", buffer);
+//!     println!("The bytes: {:?}", &buffer[..n]);
 //!     Ok(())
 //! }
 //! ```
@@ -390,6 +390,28 @@ fn read_to_end_with_reservation<R: Read + ?Sized>(r: &mut R,
     ret
 }
 
+pub(crate) fn default_read_vectored<F>(read: F, bufs: &mut [IoVecMut<'_>]) -> Result<usize>
+where
+    F: FnOnce(&mut [u8]) -> Result<usize>
+{
+    let buf = bufs
+        .iter_mut()
+        .find(|b| !b.is_empty())
+        .map_or(&mut [][..], |b| &mut **b);
+    read(buf)
+}
+
+pub(crate) fn default_write_vectored<F>(write: F, bufs: &[IoVec<'_>]) -> Result<usize>
+where
+    F: FnOnce(&[u8]) -> Result<usize>
+{
+    let buf = bufs
+        .iter()
+        .find(|b| !b.is_empty())
+        .map_or(&[][..], |b| &**b);
+    write(buf)
+}
+
 /// The `Read` trait allows for reading bytes from a source.
 ///
 /// Implementors of the `Read` trait are called 'readers'.
@@ -515,7 +537,9 @@ pub trait Read {
     ///     let mut buffer = [0; 10];
     ///
     ///     // read up to 10 bytes
-    ///     f.read(&mut buffer[..])?;
+    ///     let n = f.read(&mut buffer[..])?;
+    ///
+    ///     println!("The bytes: {:?}", &buffer[..n]);
     ///     Ok(())
     /// }
     /// ```
@@ -528,14 +552,11 @@ pub trait Read {
     /// written to possibly being only partially filled. This method must behave
     /// as a single call to `read` with the buffers concatenated would.
     ///
-    /// The default implementation simply passes the first nonempty buffer to
-    /// `read`.
+    /// The default implementation calls `read` with either the first nonempty
+    /// buffer provided, or an empty one if none exists.
     #[unstable(feature = "iovec", issue = "58452")]
     fn read_vectored(&mut self, bufs: &mut [IoVecMut<'_>]) -> Result<usize> {
-        match bufs.iter_mut().find(|b| !b.is_empty()) {
-            Some(buf) => self.read(buf),
-            None => Ok(0),
-        }
+        default_read_vectored(|b| self.read(b), bufs)
     }
 
     /// Determines if this `Read`er can work with buffers of uninitialized
@@ -896,7 +917,7 @@ pub struct IoVecMut<'a>(sys::io::IoVecMut<'a>);
 
 #[unstable(feature = "iovec", issue = "58452")]
 impl<'a> fmt::Debug for IoVecMut<'a> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self.0.as_slice(), fmt)
     }
 }
@@ -943,7 +964,7 @@ pub struct IoVec<'a>(sys::io::IoVec<'a>);
 
 #[unstable(feature = "iovec", issue = "58452")]
 impl<'a> fmt::Debug for IoVec<'a> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self.0.as_slice(), fmt)
     }
 }
@@ -1043,12 +1064,23 @@ impl Initializer {
 /// use std::fs::File;
 ///
 /// fn main() -> std::io::Result<()> {
+///     let data = b"some bytes";
+///
+///     let mut pos = 0;
 ///     let mut buffer = File::create("foo.txt")?;
 ///
-///     buffer.write(b"some bytes")?;
+///     while pos < data.len() {
+///         let bytes_written = buffer.write(&data[pos..])?;
+///         pos += bytes_written;
+///     }
 ///     Ok(())
 /// }
 /// ```
+///
+/// The trait also provides convenience methods like [`write_all`], which calls
+/// `write` in a loop until its entire input has been written.
+///
+/// [`write_all`]: #method.write_all
 #[stable(feature = "rust1", since = "1.0.0")]
 #[doc(spotlight)]
 pub trait Write {
@@ -1107,14 +1139,11 @@ pub trait Write {
     /// read from possibly being only partially consumed. This method must
     /// behave as a call to `write` with the buffers concatenated would.
     ///
-    /// The default implementation simply passes the first nonempty buffer to
-    /// `write`.
+    /// The default implementation calls `write` with either the first nonempty
+    /// buffer provided, or an empty one if none exists.
     #[unstable(feature = "iovec", issue = "58452")]
     fn write_vectored(&mut self, bufs: &[IoVec<'_>]) -> Result<usize> {
-        match bufs.iter().find(|b| !b.is_empty()) {
-            Some(buf) => self.write(buf),
-            None => Ok(0),
-        }
+        default_write_vectored(|b| self.write(b), bufs)
     }
 
     /// Flush this output stream, ensuring that all intermediately buffered
@@ -1135,7 +1164,7 @@ pub trait Write {
     /// fn main() -> std::io::Result<()> {
     ///     let mut buffer = BufWriter::new(File::create("foo.txt")?);
     ///
-    ///     buffer.write(b"some bytes")?;
+    ///     buffer.write_all(b"some bytes")?;
     ///     buffer.flush()?;
     ///     Ok(())
     /// }
@@ -1226,7 +1255,7 @@ pub trait Write {
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    fn write_fmt(&mut self, fmt: fmt::Arguments) -> Result<()> {
+    fn write_fmt(&mut self, fmt: fmt::Arguments<'_>) -> Result<()> {
         // Create a shim which translates a Write to a fmt::Write and saves
         // off I/O errors. instead of discarding them
         struct Adaptor<'a, T: ?Sized + 'a> {
@@ -1329,6 +1358,85 @@ pub trait Seek {
     /// [`SeekFrom::Start`]: enum.SeekFrom.html#variant.Start
     #[stable(feature = "rust1", since = "1.0.0")]
     fn seek(&mut self, pos: SeekFrom) -> Result<u64>;
+
+    /// Returns the length of this stream (in bytes).
+    ///
+    /// This method is implemented using up to three seek operations. If this
+    /// method returns successfully, the seek position is unchanged (i.e. the
+    /// position before calling this method is the same as afterwards).
+    /// However, if this method returns an error, the seek position is
+    /// unspecified.
+    ///
+    /// If you need to obtain the length of *many* streams and you don't care
+    /// about the seek position afterwards, you can reduce the number of seek
+    /// operations by simply calling `seek(SeekFrom::End(0))` and using its
+    /// return value (it is also the stream length).
+    ///
+    /// Note that length of a stream can change over time (for example, when
+    /// data is appended to a file). So calling this method multiple times does
+    /// not necessarily return the same length each time.
+    ///
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// #![feature(seek_convenience)]
+    /// use std::{
+    ///     io::{self, Seek},
+    ///     fs::File,
+    /// };
+    ///
+    /// fn main() -> io::Result<()> {
+    ///     let mut f = File::open("foo.txt")?;
+    ///
+    ///     let len = f.stream_len()?;
+    ///     println!("The file is currently {} bytes long", len);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[unstable(feature = "seek_convenience", issue = "59359")]
+    fn stream_len(&mut self) -> Result<u64> {
+        let old_pos = self.stream_position()?;
+        let len = self.seek(SeekFrom::End(0))?;
+
+        // Avoid seeking a third time when we were already at the end of the
+        // stream. The branch is usually way cheaper than a seek operation.
+        if old_pos != len {
+            self.seek(SeekFrom::Start(old_pos))?;
+        }
+
+        Ok(len)
+    }
+
+    /// Returns the current seek position from the start of the stream.
+    ///
+    /// This is equivalent to `self.seek(SeekFrom::Current(0))`.
+    ///
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// #![feature(seek_convenience)]
+    /// use std::{
+    ///     io::{self, BufRead, BufReader, Seek},
+    ///     fs::File,
+    /// };
+    ///
+    /// fn main() -> io::Result<()> {
+    ///     let mut f = BufReader::new(File::open("foo.txt")?);
+    ///
+    ///     let before = f.stream_position()?;
+    ///     f.read_line(&mut String::new())?;
+    ///     let after = f.stream_position()?;
+    ///
+    ///     println!("The first line was {} bytes long", after - before);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[unstable(feature = "seek_convenience", issue = "59359")]
+    fn stream_position(&mut self) -> Result<u64> {
+        self.seek(SeekFrom::Current(0))
+    }
 }
 
 /// Enumeration of possible methods to seek within an I/O object.
@@ -1798,7 +1906,7 @@ impl<T, U> Chain<T, U> {
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl<T: fmt::Debug, U: fmt::Debug> fmt::Debug for Chain<T, U> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Chain")
             .field("t", &self.first)
             .field("u", &self.second)
@@ -2157,8 +2265,7 @@ impl<B: BufRead> Iterator for Lines<B> {
 mod tests {
     use crate::io::prelude::*;
     use crate::io;
-    use super::Cursor;
-    use super::repeat;
+    use super::{Cursor, SeekFrom, repeat};
 
     #[test]
     #[cfg_attr(target_os = "emscripten", ignore)]
@@ -2379,5 +2486,51 @@ mod tests {
             let mut vec = Vec::with_capacity(1024);
             super::read_to_end(&mut lr, &mut vec)
         });
+    }
+
+    #[test]
+    fn seek_len() -> io::Result<()> {
+        let mut c = Cursor::new(vec![0; 15]);
+        assert_eq!(c.stream_len()?, 15);
+
+        c.seek(SeekFrom::End(0))?;
+        let old_pos = c.stream_position()?;
+        assert_eq!(c.stream_len()?, 15);
+        assert_eq!(c.stream_position()?, old_pos);
+
+        c.seek(SeekFrom::Start(7))?;
+        c.seek(SeekFrom::Current(2))?;
+        let old_pos = c.stream_position()?;
+        assert_eq!(c.stream_len()?, 15);
+        assert_eq!(c.stream_position()?, old_pos);
+
+        Ok(())
+    }
+
+    #[test]
+    fn seek_position() -> io::Result<()> {
+        // All `asserts` are duplicated here to make sure the method does not
+        // change anything about the seek state.
+        let mut c = Cursor::new(vec![0; 15]);
+        assert_eq!(c.stream_position()?, 0);
+        assert_eq!(c.stream_position()?, 0);
+
+        c.seek(SeekFrom::End(0))?;
+        assert_eq!(c.stream_position()?, 15);
+        assert_eq!(c.stream_position()?, 15);
+
+
+        c.seek(SeekFrom::Start(7))?;
+        c.seek(SeekFrom::Current(2))?;
+        assert_eq!(c.stream_position()?, 9);
+        assert_eq!(c.stream_position()?, 9);
+
+        c.seek(SeekFrom::End(-3))?;
+        c.seek(SeekFrom::Current(1))?;
+        c.seek(SeekFrom::Current(-5))?;
+        assert_eq!(c.stream_position()?, 8);
+        assert_eq!(c.stream_position()?, 8);
+
+        Ok(())
     }
 }

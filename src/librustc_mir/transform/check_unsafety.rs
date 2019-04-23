@@ -227,7 +227,7 @@ impl<'a, 'tcx> Visitor<'tcx> for UnsafetyChecker<'a, 'tcx> {
                 }
                 let is_borrow_of_interior_mut = context.is_borrow() && !base
                     .ty(self.mir, self.tcx)
-                    .to_ty(self.tcx)
+                    .ty
                     .is_freeze(self.tcx, self.param_env, self.source_info.span);
                 // prevent
                 // * `&mut x.field`
@@ -249,7 +249,7 @@ impl<'a, 'tcx> Visitor<'tcx> for UnsafetyChecker<'a, 'tcx> {
                         self.source_info = self.mir.local_decls[local].source_info;
                     }
                 }
-                let base_ty = base.ty(self.mir, self.tcx).to_ty(self.tcx);
+                let base_ty = base.ty(self.mir, self.tcx).ty;
                 match base_ty.sty {
                     ty::RawPtr(..) => {
                         self.require_unsafe("dereference of raw pointer",
@@ -300,11 +300,13 @@ impl<'a, 'tcx> Visitor<'tcx> for UnsafetyChecker<'a, 'tcx> {
             &Place::Base(PlaceBase::Local(..)) => {
                 // locals are safe
             }
-            &Place::Base(PlaceBase::Promoted(_)) => {
+            &Place::Base(PlaceBase::Static(box Static { kind: StaticKind::Promoted(_), .. })) => {
                 bug!("unsafety checking should happen before promotion")
             }
-            &Place::Base(PlaceBase::Static(box Static { def_id, ty: _ })) => {
-                if self.tcx.is_static(def_id) == Some(hir::Mutability::MutMutable) {
+            &Place::Base(
+                PlaceBase::Static(box Static { kind: StaticKind::Static(def_id), .. })
+            ) => {
+                if self.tcx.is_mutable_static(def_id) {
                     self.require_unsafe("use of mutable static",
                         "mutable statics can be mutated by multiple threads: aliasing violations \
                          or data races will cause undefined behavior",
@@ -418,7 +420,7 @@ impl<'a, 'tcx> UnsafetyChecker<'a, 'tcx> {
         }) = place {
             match *elem {
                 ProjectionElem::Field(..) => {
-                    let ty = base.ty(&self.mir.local_decls, self.tcx).to_ty(self.tcx);
+                    let ty = base.ty(&self.mir.local_decls, self.tcx).ty;
                     match ty.sty {
                         ty::Adt(def, _) => match self.tcx.layout_scalar_valid_range(def.did) {
                             (Bound::Unbounded, Bound::Unbounded) => {},
@@ -533,8 +535,8 @@ fn unsafety_check_result<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId)
 
     let param_env = tcx.param_env(def_id);
 
-    let id = tcx.hir().as_local_node_id(def_id).unwrap();
-    let (const_context, min_const_fn) = match tcx.hir().body_owner_kind(id) {
+    let id = tcx.hir().as_local_hir_id(def_id).unwrap();
+    let (const_context, min_const_fn) = match tcx.hir().body_owner_kind_by_hir_id(id) {
         hir::BodyOwnerKind::Closure => (false, false),
         hir::BodyOwnerKind::Fn => (tcx.is_const_fn(def_id), tcx.is_min_const_fn(def_id)),
         hir::BodyOwnerKind::Const |
@@ -558,9 +560,9 @@ fn unsafe_derive_on_repr_packed<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: D
 
     // FIXME: when we make this a hard error, this should have its
     // own error code.
-    let message = if tcx.generics_of(def_id).own_counts().types != 0 {
+    let message = if tcx.generics_of(def_id).own_requires_monomorphization() {
         "#[derive] can't be used on a #[repr(packed)] struct with \
-         type parameters (error E0133)".to_string()
+         type or const parameters (error E0133)".to_string()
     } else {
         "#[derive] can't be used on a #[repr(packed)] struct that \
          does not derive Copy (error E0133)".to_string()

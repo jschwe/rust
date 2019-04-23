@@ -3,16 +3,16 @@
 // from live codes are live, and everything else is dead.
 
 use crate::hir::Node;
-use crate::hir::{self, PatKind};
+use crate::hir::{self, PatKind, TyKind};
 use crate::hir::intravisit::{self, Visitor, NestedVisitorMap};
 use crate::hir::itemlikevisit::ItemLikeVisitor;
 
-use crate::hir::def::Def;
+use crate::hir::def::{CtorOf, Def};
 use crate::hir::CodegenFnAttrFlags;
 use crate::hir::def_id::{DefId, LOCAL_CRATE};
 use crate::lint;
 use crate::middle::privacy;
-use crate::ty::{self, TyCtxt};
+use crate::ty::{self, DefIdTree, TyCtxt};
 use crate::util::nodemap::FxHashSet;
 
 use rustc_data_structures::fx::FxHashMap;
@@ -54,8 +54,7 @@ struct MarkSymbolVisitor<'a, 'tcx: 'a> {
 impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
     fn check_def_id(&mut self, def_id: DefId) {
         if let Some(hir_id) = self.tcx.hir().as_local_hir_id(def_id) {
-            if should_explore(self.tcx, hir_id) ||
-               self.struct_constructors.contains_key(&hir_id) {
+            if should_explore(self.tcx, hir_id) || self.struct_constructors.contains_key(&hir_id) {
                 self.worklist.push(hir_id);
             }
             self.live_symbols.insert(hir_id);
@@ -74,17 +73,25 @@ impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
             Def::Const(_) | Def::AssociatedConst(..) | Def::TyAlias(_) => {
                 self.check_def_id(def.def_id());
             }
-            _ if self.in_pat => (),
+            _ if self.in_pat => {},
             Def::PrimTy(..) | Def::SelfTy(..) | Def::SelfCtor(..) |
             Def::Local(..) | Def::Upvar(..) => {}
-            Def::Variant(variant_id) | Def::VariantCtor(variant_id, ..) => {
-                if let Some(enum_id) = self.tcx.parent_def_id(variant_id) {
-                    self.check_def_id(enum_id);
+            Def::Ctor(ctor_def_id, CtorOf::Variant, ..) => {
+                let variant_id = self.tcx.parent(ctor_def_id).unwrap();
+                let enum_id = self.tcx.parent(variant_id).unwrap();
+                self.check_def_id(enum_id);
+                if !self.ignore_variant_stack.contains(&ctor_def_id) {
+                    self.check_def_id(variant_id);
                 }
+            }
+            Def::Variant(variant_id) => {
+                let enum_id = self.tcx.parent(variant_id).unwrap();
+                self.check_def_id(enum_id);
                 if !self.ignore_variant_stack.contains(&variant_id) {
                     self.check_def_id(variant_id);
                 }
             }
+            Def::ToolMod | Def::NonMacroAttr(..) | Def::Err => {}
             _ => {
                 self.check_def_id(def.def_id());
             }
@@ -92,8 +99,8 @@ impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
     }
 
     fn lookup_and_handle_method(&mut self, id: hir::HirId) {
-        if let Some(def) = self.tables.type_dependent_defs().get(id) {
-            self.check_def_id(def.def_id());
+        if let Some(def_id) = self.tables.type_dependent_def_id(id) {
+            self.check_def_id(def_id);
         } else {
             bug!("no type-dependent def for method");
         }
@@ -160,16 +167,13 @@ impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
                     }
                     hir::ItemKind::Enum(..) => {
                         self.inherited_pub_visibility = item.vis.node.is_pub();
+
                         intravisit::walk_item(self, &item);
                     }
-                    hir::ItemKind::Fn(..)
-                    | hir::ItemKind::Ty(..)
-                    | hir::ItemKind::Static(..)
-                    | hir::ItemKind::Existential(..)
-                    | hir::ItemKind::Const(..) => {
+                    hir::ItemKind::ForeignMod(..) => {}
+                    _ => {
                         intravisit::walk_item(self, &item);
                     }
-                    _ => ()
                 }
             }
             Node::TraitItem(trait_item) => {
@@ -181,7 +185,7 @@ impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
             Node::ForeignItem(foreign_item) => {
                 intravisit::walk_foreign_item(self, &foreign_item);
             }
-            _ => ()
+            _ => {}
         }
         self.repr_has_repr_c = had_repr_c;
         self.inherited_pub_visibility = had_inherited_pub_visibility;
@@ -282,6 +286,17 @@ impl<'a, 'tcx> Visitor<'tcx> for MarkSymbolVisitor<'a, 'tcx> {
         self.handle_definition(path.def);
         intravisit::walk_path(self, path);
     }
+
+    fn visit_ty(&mut self, ty: &'tcx hir::Ty) {
+        match ty.node {
+            TyKind::Def(item_id, _) => {
+                let item = self.tcx.hir().expect_item_by_hir_id(item_id.id);
+                intravisit::walk_item(self, item);
+            }
+            _ => ()
+        }
+        intravisit::walk_ty(self, ty);
+    }
 }
 
 fn has_allow_dead_code_or_lang_attr(tcx: TyCtxt<'_, '_, '_>,
@@ -349,9 +364,16 @@ impl<'v, 'k, 'tcx> ItemLikeVisitor<'v> for LifeSeeder<'k, 'tcx> {
             self.worklist.push(item.hir_id);
         }
         match item.node {
-            hir::ItemKind::Enum(ref enum_def, _) if allow_dead_code => {
-                self.worklist.extend(enum_def.variants.iter()
-                                                      .map(|variant| variant.node.data.hir_id()));
+            hir::ItemKind::Enum(ref enum_def, _) => {
+                if allow_dead_code {
+                    self.worklist.extend(enum_def.variants.iter().map(|variant| variant.node.id));
+                }
+
+                for variant in &enum_def.variants {
+                    if let Some(ctor_hir_id) = variant.node.data.ctor_hir_id() {
+                        self.struct_constructors.insert(ctor_hir_id, variant.node.id);
+                    }
+                }
             }
             hir::ItemKind::Trait(.., ref trait_item_refs) => {
                 for trait_item_ref in trait_item_refs {
@@ -381,7 +403,9 @@ impl<'v, 'k, 'tcx> ItemLikeVisitor<'v> for LifeSeeder<'k, 'tcx> {
                 }
             }
             hir::ItemKind::Struct(ref variant_data, _) => {
-                self.struct_constructors.insert(variant_data.hir_id(), item.hir_id);
+                if let Some(ctor_hir_id) = variant_data.ctor_hir_id() {
+                    self.struct_constructors.insert(ctor_hir_id, item.hir_id);
+                }
             }
             _ => ()
         }
@@ -403,7 +427,7 @@ fn create_and_seed_worklist<'a, 'tcx>(
 ) -> (Vec<hir::HirId>, FxHashMap<hir::HirId, hir::HirId>) {
     let worklist = access_levels.map.iter().filter_map(|(&id, level)| {
         if level >= &privacy::AccessLevel::Reachable {
-            Some(tcx.hir().node_to_hir_id(id))
+            Some(id)
         } else {
             None
         }
@@ -473,9 +497,9 @@ impl<'a, 'tcx> DeadVisitor<'a, 'tcx> {
     }
 
     fn should_warn_about_variant(&mut self, variant: &hir::VariantKind) -> bool {
-        !self.symbol_is_live(variant.data.hir_id())
+        !self.symbol_is_live(variant.id)
             && !has_allow_dead_code_or_lang_attr(self.tcx,
-                                                 variant.data.hir_id(),
+                                                 variant.id,
                                                  &variant.attrs)
     }
 
@@ -572,7 +596,7 @@ impl<'a, 'tcx> Visitor<'tcx> for DeadVisitor<'a, 'tcx> {
                      g: &'tcx hir::Generics,
                      id: hir::HirId) {
         if self.should_warn_about_variant(&variant.node) {
-            self.warn_dead_code(variant.node.data.hir_id(), variant.span, variant.node.ident.name,
+            self.warn_dead_code(variant.node.id, variant.span, variant.node.ident.name,
                                 "variant", "constructed");
         } else {
             intravisit::walk_variant(self, variant, g, id);

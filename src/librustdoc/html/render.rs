@@ -61,7 +61,7 @@ use crate::doctree;
 use crate::fold::DocFolder;
 use crate::html::escape::Escape;
 use crate::html::format::{AsyncSpace, ConstnessSpace};
-use crate::html::format::{GenericBounds, WhereClause, href, AbiSpace};
+use crate::html::format::{GenericBounds, WhereClause, href, AbiSpace, DefaultSpace};
 use crate::html::format::{VisSpace, Function, UnsafetySpace, MutableSpace};
 use crate::html::format::fmt_impl_for_trait_page;
 use crate::html::item_type::ItemType;
@@ -271,7 +271,7 @@ pub struct Cache {
     /// Mapping of typaram ids to the name of the type parameter. This is used
     /// when pretty-printing a type (so pretty-printing doesn't have to
     /// painfully maintain a context like this)
-    pub typarams: FxHashMap<DefId, String>,
+    pub param_names: FxHashMap<DefId, String>,
 
     /// Maps a type ID to all known implementations for that type. This is only
     /// recognized for intra-crate `ResolvedPath` types, and is used to print
@@ -368,7 +368,7 @@ pub struct Cache {
 pub struct RenderInfo {
     pub inlined: FxHashSet<DefId>,
     pub external_paths: crate::core::ExternalPaths,
-    pub external_typarams: FxHashMap<DefId, String>,
+    pub external_param_names: FxHashMap<DefId, String>,
     pub exact_paths: FxHashMap<DefId, Vec<String>>,
     pub access_levels: AccessLevels<DefId>,
     pub deref_trait_did: Option<DefId>,
@@ -446,7 +446,7 @@ impl ToJson for Type {
                 }
                 Json::Array(data)
             }
-            None => Json::Null
+            None => Json::Null,
         }
     }
 }
@@ -455,19 +455,27 @@ impl ToJson for Type {
 #[derive(Debug)]
 struct IndexItemFunctionType {
     inputs: Vec<Type>,
-    output: Option<Type>,
+    output: Option<Vec<Type>>,
 }
 
 impl ToJson for IndexItemFunctionType {
     fn to_json(&self) -> Json {
         // If we couldn't figure out a type, just write `null`.
-        if self.inputs.iter().chain(self.output.iter()).any(|ref i| i.name.is_none()) {
+        let mut iter = self.inputs.iter();
+        if match self.output {
+            Some(ref output) => iter.chain(output.iter()).any(|ref i| i.name.is_none()),
+            None => iter.any(|ref i| i.name.is_none()),
+        } {
             Json::Null
         } else {
             let mut data = Vec::with_capacity(2);
             data.push(self.inputs.to_json());
             if let Some(ref output) = self.output {
-                data.push(output.to_json());
+                if output.len() > 1 {
+                    data.push(output.to_json());
+                } else {
+                    data.push(output[0].to_json());
+                }
             }
             Json::Array(data)
         }
@@ -562,24 +570,23 @@ pub fn run(mut krate: clean::Crate,
     // going to emit HTML
     if let Some(attrs) = krate.module.as_ref().map(|m| &m.attrs) {
         for attr in attrs.lists("doc") {
-            let name = attr.name().map(|s| s.as_str());
-            match (name.as_ref().map(|s| &s[..]), attr.value_str()) {
-                (Some("html_favicon_url"), Some(s)) => {
+            match (attr.name_or_empty().get(), attr.value_str()) {
+                ("html_favicon_url", Some(s)) => {
                     scx.layout.favicon = s.to_string();
                 }
-                (Some("html_logo_url"), Some(s)) => {
+                ("html_logo_url", Some(s)) => {
                     scx.layout.logo = s.to_string();
                 }
-                (Some("html_playground_url"), Some(s)) => {
+                ("html_playground_url", Some(s)) => {
                     markdown::PLAYGROUND.with(|slot| {
                         let name = krate.name.clone();
                         *slot.borrow_mut() = Some((Some(name), s.to_string()));
                     });
                 }
-                (Some("issue_tracker_base_url"), Some(s)) => {
+                ("issue_tracker_base_url", Some(s)) => {
                     scx.issue_tracker_base_url = Some(s.to_string());
                 }
-                (Some("html_no_source"), None) if attr.is_word() => {
+                ("html_no_source", None) if attr.is_word() => {
                     scx.include_sources = false;
                 }
                 _ => {}
@@ -602,7 +609,7 @@ pub fn run(mut krate: clean::Crate,
     let RenderInfo {
         inlined: _,
         external_paths,
-        external_typarams,
+        external_param_names,
         exact_paths,
         access_levels,
         deref_trait_did,
@@ -636,7 +643,7 @@ pub fn run(mut krate: clean::Crate,
         deref_mut_trait_did,
         owned_box_did,
         masked_crates: mem::replace(&mut krate.masked_crates, Default::default()),
-        typarams: external_typarams,
+        param_names: external_param_names,
         aliases: Default::default(),
     };
 
@@ -958,7 +965,11 @@ themePicker.onblur = handleThemeButtonsBlur;
                 if for_search_index && line.starts_with("var R") {
                     variables.push(line.clone());
                     // We need to check if the crate name has been put into a variable as well.
-                    let tokens = js::simple_minify(&line).apply(js::clean_tokens);
+                    let tokens: js::Tokens<'_> = js::simple_minify(&line)
+                                                    .into_iter()
+                                                    .filter(js::clean_token)
+                                                    .collect::<Vec<_>>()
+                                                    .into();
                     let mut pos = 0;
                     while pos < tokens.len() {
                         if let Some((var_pos, Some(value_pos))) =
@@ -1002,7 +1013,7 @@ themePicker.onblur = handleThemeButtonsBlur;
                 })
     }
 
-    let dst = cx.dst.join("aliases.js");
+    let dst = cx.dst.join(&format!("aliases{}.js", cx.shared.resource_suffix));
     {
         let (mut all_aliases, _, _) = try_err!(collect(&dst, &krate.name, "ALIASES", false), &dst);
         let mut w = try_err!(File::create(&dst), &dst);
@@ -1053,17 +1064,26 @@ themePicker.onblur = handleThemeButtonsBlur;
                                                         .expect("invalid osstring conversion")))
                                       .collect::<Vec<_>>();
             files.sort_unstable_by(|a, b| a.cmp(b));
-            // FIXME(imperio): we could avoid to generate "dirs" and "files" if they're empty.
-            format!("{{\"name\":\"{name}\",\"dirs\":[{subs}],\"files\":[{files}]}}",
+            let subs = subs.iter().map(|s| s.to_json_string()).collect::<Vec<_>>().join(",");
+            let dirs = if subs.is_empty() {
+                String::new()
+            } else {
+                format!(",\"dirs\":[{}]", subs)
+            };
+            let files = files.join(",");
+            let files = if files.is_empty() {
+                String::new()
+            } else {
+                format!(",\"files\":[{}]", files)
+            };
+            format!("{{\"name\":\"{name}\"{dirs}{files}}}",
                     name=self.elem.to_str().expect("invalid osstring conversion"),
-                    subs=subs.iter().map(|s| s.to_json_string()).collect::<Vec<_>>().join(","),
-                    files=files.join(","))
+                    dirs=dirs,
+                    files=files)
         }
     }
 
     if cx.shared.include_sources {
-        use std::path::Component;
-
         let mut hierarchy = Hierarchy::new(OsString::new());
         for source in cx.shared.local_sources.iter()
                                              .filter_map(|p| p.0.strip_prefix(&cx.shared.src_root)
@@ -1090,7 +1110,7 @@ themePicker.onblur = handleThemeButtonsBlur;
             }
         }
 
-        let dst = cx.dst.join("source-files.js");
+        let dst = cx.dst.join(&format!("source-files{}.js", cx.shared.resource_suffix));
         let (mut all_sources, _krates, _) = try_err!(collect(&dst, &krate.name, "sourcesIndex",
                                                              false),
                                                      &dst);
@@ -1106,7 +1126,7 @@ themePicker.onblur = handleThemeButtonsBlur;
     }
 
     // Update the search index
-    let dst = cx.dst.join("search-index.js");
+    let dst = cx.dst.join(&format!("search-index{}.js", cx.shared.resource_suffix));
     let (mut all_indexes, mut krates, variables) = try_err!(collect(&dst,
                                                                     &krate.name,
                                                                     "searchIndex",
@@ -1117,11 +1137,7 @@ themePicker.onblur = handleThemeButtonsBlur;
     // with rustdoc running in parallel.
     all_indexes.sort();
     let mut w = try_err!(File::create(&dst), &dst);
-    if options.enable_minification {
-        try_err!(writeln!(&mut w, "var N=null,E=\"\",T=\"t\",U=\"u\",searchIndex={{}};"), &dst);
-    } else {
-        try_err!(writeln!(&mut w, "var searchIndex={{}};"), &dst);
-    }
+    try_err!(writeln!(&mut w, "var N=null,E=\"\",T=\"t\",U=\"u\",searchIndex={{}};"), &dst);
     try_err!(write_minify_replacer(&mut w,
                                    &format!("{}\n{}", variables.join(""), all_indexes.join("\n")),
                                    options.enable_minification),
@@ -1287,46 +1303,51 @@ fn write_minify_replacer<W: Write>(
     contents: &str,
     enable_minification: bool,
 ) -> io::Result<()> {
-    use minifier::js::{Keyword, ReservedChar, Token};
+    use minifier::js::{simple_minify, Keyword, ReservedChar, Token, Tokens};
 
     if enable_minification {
         writeln!(dst, "{}",
-                 minifier::js::simple_minify(contents)
-                              .apply(|f| {
-                                  // We keep backlines.
-                                  minifier::js::clean_tokens_except(f, |c| {
-                                      c.get_char() != Some(ReservedChar::Backline)
-                                  })
-                              })
-                              .apply(|f| {
-                                  minifier::js::replace_token_with(f, |t| {
-                                      match *t {
-                                          Token::Keyword(Keyword::Null) => Some(Token::Other("N")),
-                                          Token::String(s) => {
-                                              let s = &s[1..s.len() -1]; // The quotes are included
-                                              if s.is_empty() {
-                                                  Some(Token::Other("E"))
-                                              } else if s == "t" {
-                                                  Some(Token::Other("T"))
-                                              } else if s == "u" {
-                                                  Some(Token::Other("U"))
-                                              } else {
-                                                  None
-                                              }
-                                          }
-                                          _ => None,
-                                      }
-                                  })
-                              })
-                              .apply(|f| {
-                                  // We add a backline after the newly created variables.
-                                  minifier::js::aggregate_strings_into_array_with_separation(
-                                      f,
-                                      "R",
-                                      Token::Char(ReservedChar::Backline),
-                                  )
-                              })
-                              .to_string())
+                 {
+                    let tokens: Tokens<'_> = simple_minify(contents)
+                        .into_iter()
+                        .filter(|f| {
+                            // We keep backlines.
+                            minifier::js::clean_token_except(f, &|c: &Token<'_>| {
+                                c.get_char() != Some(ReservedChar::Backline)
+                            })
+                        })
+                        .map(|f| {
+                            minifier::js::replace_token_with(f, &|t: &Token<'_>| {
+                                match *t {
+                                    Token::Keyword(Keyword::Null) => Some(Token::Other("N")),
+                                    Token::String(s) => {
+                                        let s = &s[1..s.len() -1]; // The quotes are included
+                                        if s.is_empty() {
+                                            Some(Token::Other("E"))
+                                        } else if s == "t" {
+                                            Some(Token::Other("T"))
+                                        } else if s == "u" {
+                                            Some(Token::Other("U"))
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    _ => None,
+                                }
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .into();
+                    tokens.apply(|f| {
+                        // We add a backline after the newly created variables.
+                        minifier::js::aggregate_strings_into_array_with_separation(
+                            f,
+                            "R",
+                            Token::Char(ReservedChar::Backline),
+                        )
+                    })
+                    .to_string()
+                })
     } else {
         writeln!(dst, "{}", contents)
     }
@@ -1473,7 +1494,7 @@ impl<'a> SourceCollector<'a> {
             description: &desc,
             keywords: BASIC_KEYWORDS,
             resource_suffix: &self.scx.resource_suffix,
-            extra_scripts: &["source-files"],
+            extra_scripts: &[&format!("source-files{}", self.scx.resource_suffix)],
             static_extra_scripts: &[&format!("source-script{}", self.scx.resource_suffix)],
         };
         layout::render(&mut w, &self.scx.layout,
@@ -1756,7 +1777,7 @@ impl<'a> Cache {
                 clean::GenericParamDefKind::Lifetime => {}
                 clean::GenericParamDefKind::Type { did, .. } |
                 clean::GenericParamDefKind::Const { did, .. } => {
-                    self.typarams.insert(did, param.name.clone());
+                    self.param_names.insert(did, param.name.clone());
                 }
             }
         }
@@ -2092,7 +2113,8 @@ impl Context {
                  &final_file);
 
         // Generating settings page.
-        let settings = Settings::new("./", &self.shared.resource_suffix);
+        let settings = Settings::new(self.shared.static_root_path.deref().unwrap_or("./"),
+                                     &self.shared.resource_suffix);
         page.title = "Rustdoc settings";
         page.description = "Settings of Rustdoc";
         page.root_path = "./";
@@ -2601,7 +2623,15 @@ fn document_non_exhaustive_header(item: &clean::Item) -> &str {
 fn document_non_exhaustive(w: &mut fmt::Formatter<'_>, item: &clean::Item) -> fmt::Result {
     if item.is_non_exhaustive() {
         write!(w, "<div class='docblock non-exhaustive non-exhaustive-{}'>", {
-            if item.is_struct() { "struct" } else if item.is_enum() { "enum" } else { "type" }
+            if item.is_struct() {
+                "struct"
+            } else if item.is_enum() {
+                "enum"
+            } else if item.is_variant() {
+                "variant"
+            } else {
+                "type"
+            }
         })?;
 
         if item.is_struct() {
@@ -2614,6 +2644,10 @@ fn document_non_exhaustive(w: &mut fmt::Formatter<'_>, item: &clean::Item) -> fm
             write!(w, "Non-exhaustive enums could have additional variants added in future. \
                        Therefore, when matching against variants of non-exhaustive enums, an \
                        extra wildcard arm must be added to account for any future variants.")?;
+        } else if item.is_variant() {
+            write!(w, "Non-exhaustive enum variants could have additional fields added in future. \
+                       Therefore, non-exhaustive enum variants cannot be constructed in external \
+                       crates and cannot be matched against.")?;
         } else {
             write!(w, "This type will require a wildcard arm in any match statements or \
                        constructors.")?;
@@ -3114,7 +3148,6 @@ fn item_trait(
             // FIXME: we should be using a derived_id for the Anchors here
             write!(w, "{{\n")?;
             for t in &types {
-                write!(w, "    ")?;
                 render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait)?;
                 write!(w, ";\n")?;
             }
@@ -3122,7 +3155,6 @@ fn item_trait(
                 w.write_str("\n")?;
             }
             for t in &consts {
-                write!(w, "    ")?;
                 render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait)?;
                 write!(w, ";\n")?;
             }
@@ -3130,7 +3162,6 @@ fn item_trait(
                 w.write_str("\n")?;
             }
             for (pos, m) in required.iter().enumerate() {
-                write!(w, "    ")?;
                 render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait)?;
                 write!(w, ";\n")?;
 
@@ -3142,7 +3173,6 @@ fn item_trait(
                 w.write_str("\n")?;
             }
             for (pos, m) in provided.iter().enumerate() {
-                write!(w, "    ")?;
                 render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait)?;
                 match m.inner {
                     clean::MethodItem(ref inner) if !inner.generics.where_predicates.is_empty() => {
@@ -3434,11 +3464,12 @@ fn render_assoc_item(w: &mut fmt::Formatter<'_>,
             }
         };
         let mut header_len = format!(
-            "{}{}{}{}{:#}fn {}{:#}",
+            "{}{}{}{}{}{:#}fn {}{:#}",
             VisSpace(&meth.visibility),
             ConstnessSpace(header.constness),
             UnsafetySpace(header.unsafety),
             AsyncSpace(header.asyncness),
+            DefaultSpace(meth.is_default()),
             AbiSpace(header.abi),
             name,
             *g
@@ -3450,12 +3481,14 @@ fn render_assoc_item(w: &mut fmt::Formatter<'_>,
             (0, true)
         };
         render_attributes(w, meth)?;
-        write!(w, "{}{}{}{}{}fn <a href='{href}' class='fnname'>{name}</a>\
+        write!(w, "{}{}{}{}{}{}{}fn <a href='{href}' class='fnname'>{name}</a>\
                    {generics}{decl}{where_clause}",
+               if parent == ItemType::Trait { "    " } else { "" },
                VisSpace(&meth.visibility),
                ConstnessSpace(header.constness),
                UnsafetySpace(header.unsafety),
                AsyncSpace(header.asyncness),
+               DefaultSpace(meth.is_default()),
                AbiSpace(header.abi),
                href = href,
                name = name,
@@ -3674,6 +3707,7 @@ fn item_enum(w: &mut fmt::Formatter<'_>, cx: &Context, it: &clean::Item,
             }
             write!(w, "</code></span>")?;
             document(w, cx, variant)?;
+            document_non_exhaustive(w, variant)?;
 
             use crate::clean::{Variant, VariantKind};
             if let clean::VariantItem(Variant {
@@ -3718,19 +3752,19 @@ fn item_enum(w: &mut fmt::Formatter<'_>, cx: &Context, it: &clean::Item,
 }
 
 fn render_attribute(attr: &ast::MetaItem) -> Option<String> {
-    let name = attr.name();
+    let path = attr.path.to_string();
 
     if attr.is_word() {
-        Some(name.to_string())
+        Some(path)
     } else if let Some(v) = attr.value_str() {
-        Some(format!("{} = {:?}", name, v.as_str()))
+        Some(format!("{} = {:?}", path, v.as_str()))
     } else if let Some(values) = attr.meta_item_list() {
         let display: Vec<_> = values.iter().filter_map(|attr| {
             attr.meta_item().and_then(|mi| render_attribute(mi))
         }).collect();
 
         if display.len() > 0 {
-            Some(format!("{}({})", name, display.join(", ")))
+            Some(format!("{}({})", path, display.join(", ")))
         } else {
             None
         }
@@ -3750,12 +3784,11 @@ const ATTRIBUTE_WHITELIST: &'static [&'static str] = &[
     "non_exhaustive"
 ];
 
-fn render_attributes(w: &mut fmt::Formatter<'_>, it: &clean::Item) -> fmt::Result {
+fn render_attributes(w: &mut dyn fmt::Write, it: &clean::Item) -> fmt::Result {
     let mut attrs = String::new();
 
     for attr in &it.attrs.other_attrs {
-        let name = attr.name();
-        if !ATTRIBUTE_WHITELIST.contains(&&*name.as_str()) {
+        if !ATTRIBUTE_WHITELIST.contains(&attr.name_or_empty().get()) {
             continue;
         }
         if let Some(s) = render_attribute(&attr.meta().unwrap()) {
@@ -5029,20 +5062,26 @@ fn make_item_keywords(it: &clean::Item) -> String {
 }
 
 fn get_index_search_type(item: &clean::Item) -> Option<IndexItemFunctionType> {
-    let decl = match item.inner {
-        clean::FunctionItem(ref f) => &f.decl,
-        clean::MethodItem(ref m) => &m.decl,
-        clean::TyMethodItem(ref m) => &m.decl,
-        _ => return None
+    let (all_types, ret_types) = match item.inner {
+        clean::FunctionItem(ref f) => (&f.all_types, &f.ret_types),
+        clean::MethodItem(ref m) => (&m.all_types, &m.ret_types),
+        clean::TyMethodItem(ref m) => (&m.all_types, &m.ret_types),
+        _ => return None,
     };
 
-    let inputs = decl.inputs.values.iter().map(|arg| get_index_type(&arg.type_)).collect();
-    let output = match decl.output {
-        clean::FunctionRetTy::Return(ref return_type) => Some(get_index_type(return_type)),
-        _ => None
+    let inputs = all_types.iter().map(|arg| {
+        get_index_type(&arg)
+    }).filter(|a| a.name.is_some()).collect();
+    let output = ret_types.iter().map(|arg| {
+        get_index_type(&arg)
+    }).filter(|a| a.name.is_some()).collect::<Vec<_>>();
+    let output = if output.is_empty() {
+        None
+    } else {
+        Some(output)
     };
 
-    Some(IndexItemFunctionType { inputs: inputs, output: output })
+    Some(IndexItemFunctionType { inputs, output })
 }
 
 fn get_index_type(clean_type: &clean::Type) -> Type {

@@ -48,6 +48,7 @@ pub struct Config {
     pub exclude: Vec<PathBuf>,
     pub rustc_error_format: Option<String>,
     pub test_compare_mode: bool,
+    pub llvm_libunwind: bool,
 
     pub run_host_only: bool,
 
@@ -64,7 +65,6 @@ pub struct Config {
     pub backtrace_on_ice: bool,
 
     // llvm codegen options
-    pub llvm_enabled: bool,
     pub llvm_assertions: bool,
     pub llvm_optimize: bool,
     pub llvm_thin_lto: bool,
@@ -170,6 +170,7 @@ pub struct Target {
     pub ndk: Option<PathBuf>,
     pub crt_static: Option<bool>,
     pub musl_root: Option<PathBuf>,
+    pub wasi_root: Option<PathBuf>,
     pub qemu_rootfs: Option<PathBuf>,
     pub no_std: bool,
 }
@@ -244,7 +245,6 @@ struct Install {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Llvm {
-    enabled: Option<bool>,
     ccache: Option<StringOrBool>,
     ninja: Option<bool>,
     assertions: Option<bool>,
@@ -330,6 +330,7 @@ struct Rust {
     remap_debuginfo: Option<bool>,
     jemalloc: Option<bool>,
     test_compare_mode: Option<bool>,
+    llvm_libunwind: Option<bool>,
 }
 
 /// TOML representation of how each build target is configured.
@@ -346,6 +347,7 @@ struct TomlTarget {
     android_ndk: Option<String>,
     crt_static: Option<bool>,
     musl_root: Option<String>,
+    wasi_root: Option<String>,
     qemu_rootfs: Option<String>,
 }
 
@@ -360,7 +362,6 @@ impl Config {
 
     pub fn default_opts() -> Config {
         let mut config = Config::default();
-        config.llvm_enabled = true;
         config.llvm_optimize = true;
         config.llvm_version_check = true;
         config.backtrace = true;
@@ -512,7 +513,6 @@ impl Config {
                 Some(StringOrBool::Bool(false)) | None => {}
             }
             set(&mut config.ninja, llvm.ninja);
-            set(&mut config.llvm_enabled, llvm.enabled);
             llvm_assertions = llvm.assertions;
             set(&mut config.llvm_optimize, llvm.optimize);
             set(&mut config.llvm_thin_lto, llvm.thin_lto);
@@ -550,6 +550,7 @@ impl Config {
             set(&mut config.rust_rpath, rust.rpath);
             set(&mut config.jemalloc, rust.jemalloc);
             set(&mut config.test_compare_mode, rust.test_compare_mode);
+            set(&mut config.llvm_libunwind, rust.llvm_libunwind);
             set(&mut config.backtrace, rust.backtrace);
             set(&mut config.channel, rust.channel.clone());
             set(&mut config.rust_dist_src, rust.dist_src);
@@ -609,6 +610,7 @@ impl Config {
                 target.linker = cfg.linker.clone().map(PathBuf::from);
                 target.crt_static = cfg.crt_static.clone();
                 target.musl_root = cfg.musl_root.clone().map(PathBuf::from);
+                target.wasi_root = cfg.wasi_root.clone().map(PathBuf::from);
                 target.qemu_rootfs = cfg.qemu_rootfs.clone().map(PathBuf::from);
 
                 config.target_config.insert(INTERNER.intern_string(triple.clone()), target);
@@ -670,6 +672,11 @@ impl Config {
 
     pub fn very_verbose(&self) -> bool {
         self.verbose > 1
+    }
+
+    pub fn llvm_enabled(&self) -> bool {
+        self.rust_codegen_backends.contains(&INTERNER.intern_str("llvm"))
+        || self.rust_codegen_backends.contains(&INTERNER.intern_str("emscripten"))
     }
 }
 

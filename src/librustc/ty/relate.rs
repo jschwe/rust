@@ -8,7 +8,7 @@ use crate::hir::def_id::DefId;
 use crate::ty::subst::{Kind, UnpackedKind, SubstsRef};
 use crate::ty::{self, Ty, TyCtxt, TypeFoldable};
 use crate::ty::error::{ExpectedFound, TypeError};
-use crate::mir::interpret::GlobalId;
+use crate::mir::interpret::{GlobalId, ConstValue};
 use crate::util::common::ErrorReported;
 use syntax_pos::DUMMY_SP;
 use std::rc::Rc;
@@ -351,10 +351,8 @@ pub fn super_relate_tys<'a, 'gcx, 'tcx, R>(relation: &mut R,
     where R: TypeRelation<'a, 'gcx, 'tcx>, 'gcx: 'a+'tcx, 'tcx: 'a
 {
     let tcx = relation.tcx();
-    let a_sty = &a.sty;
-    let b_sty = &b.sty;
-    debug!("super_relate_tys: a_sty={:?} b_sty={:?}", a_sty, b_sty);
-    match (a_sty, b_sty) {
+    debug!("super_relate_tys: a={:?} b={:?}", a, b);
+    match (&a.sty, &b.sty) {
         (&ty::Infer(_), _) |
         (_, &ty::Infer(_)) =>
         {
@@ -468,9 +466,9 @@ pub fn super_relate_tys<'a, 'gcx, 'tcx, R>(relation: &mut R,
         (&ty::Array(a_t, sz_a), &ty::Array(b_t, sz_b)) =>
         {
             let t = relation.relate(&a_t, &b_t)?;
-            let to_u64 = |x: ty::LazyConst<'tcx>| -> Result<u64, ErrorReported> {
-                match x {
-                    ty::LazyConst::Unevaluated(def_id, substs) => {
+            let to_u64 = |x: ty::Const<'tcx>| -> Result<u64, ErrorReported> {
+                match x.val {
+                    ConstValue::Unevaluated(def_id, substs) => {
                         // FIXME(eddyb) get the right param_env.
                         let param_env = ty::ParamEnv::empty();
                         if let Some(substs) = tcx.lift_to_global(&substs) {
@@ -496,7 +494,7 @@ pub fn super_relate_tys<'a, 'gcx, 'tcx, R>(relation: &mut R,
                             "array length could not be evaluated");
                         Err(ErrorReported)
                     }
-                    ty::LazyConst::Evaluated(c) => c.assert_usize(tcx).ok_or_else(|| {
+                    _ => x.assert_usize(tcx).ok_or_else(|| {
                         tcx.sess.delay_span_bug(DUMMY_SP,
                             "array length could not be evaluated");
                         ErrorReported
@@ -704,6 +702,9 @@ impl<'tcx> Relate<'tcx> for Kind<'tcx> {
             }
             (UnpackedKind::Type(unpacked), x) => {
                 bug!("impossible case reached: can't relate: {:?} with {:?}", unpacked, x)
+            }
+            (UnpackedKind::Const(_), _) => {
+                unimplemented!() // FIXME(const_generics)
             }
         }
     }

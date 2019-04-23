@@ -3,7 +3,7 @@
 use super::{FnCtxt, Needs};
 use super::method::MethodCallee;
 use rustc::ty::{self, Ty, TypeFoldable};
-use rustc::ty::TyKind::{Ref, Adt, Str, Uint, Never, Tuple, Char, Array};
+use rustc::ty::TyKind::{Ref, Adt, FnDef, Str, Uint, Never, Tuple, Char, Array};
 use rustc::ty::adjustment::{Adjustment, Adjust, AllowTwoPhase, AutoBorrow, AutoBorrowMutability};
 use rustc::infer::type_variable::TypeVariableOrigin;
 use errors::{self,Applicability};
@@ -306,7 +306,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             if let Some(missing_trait) = missing_trait {
                                 if op.node == hir::BinOpKind::Add &&
                                     self.check_str_addition(expr, lhs_expr, rhs_expr, lhs_ty,
-                                                            rhs_ty, &mut err, true) {
+                                                            rhs_ty, &mut err, true, op) {
                                     // This has nothing here because it means we did string
                                     // concatenation (e.g., "Hello " += "World!"). This means
                                     // we don't want the note in the else clause to be emitted
@@ -327,10 +327,31 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             err.emit();
                         }
                         IsAssign::No => {
-                            let mut err = struct_span_err!(self.tcx.sess, expr.span, E0369,
+                            let mut err = struct_span_err!(self.tcx.sess, op.span, E0369,
                                 "binary operation `{}` cannot be applied to type `{}`",
                                 op.node.as_str(),
                                 lhs_ty);
+
+                            let mut involves_fn = false;
+                            if !lhs_expr.span.eq(&rhs_expr.span) {
+                                involves_fn |= self.add_type_neq_err_label(
+                                    &mut err,
+                                    lhs_expr.span,
+                                    lhs_ty,
+                                    rhs_ty,
+                                    op,
+                                    is_assign
+                                );
+                                involves_fn |= self.add_type_neq_err_label(
+                                    &mut err,
+                                    rhs_expr.span,
+                                    rhs_ty,
+                                    lhs_ty,
+                                    op,
+                                    is_assign
+                                );
+                            }
+
                             let mut suggested_deref = false;
                             if let Ref(_, mut rty, _) = lhs_ty.sty {
                                 if {
@@ -380,7 +401,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             if let Some(missing_trait) = missing_trait {
                                 if op.node == hir::BinOpKind::Add &&
                                     self.check_str_addition(expr, lhs_expr, rhs_expr, lhs_ty,
-                                                            rhs_ty, &mut err, false) {
+                                                            rhs_ty, &mut err, false, op) {
                                     // This has nothing here because it means we did string
                                     // concatenation (e.g., "Hello " + "World!"). This means
                                     // we don't want the note in the else clause to be emitted
@@ -390,7 +411,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                         "`{}` might need a bound for `{}`",
                                         lhs_ty, missing_trait
                                     ));
-                                } else if !suggested_deref {
+                                } else if !suggested_deref && !involves_fn {
                                     err.note(&format!(
                                         "an implementation of `{}` might \
                                          be missing for `{}`",
@@ -409,6 +430,72 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         (lhs_ty, rhs_ty, return_ty)
     }
 
+    /// If one of the types is an uncalled function and calling it would yield the other type,
+    /// suggest calling the function. Returns wether a suggestion was given.
+    fn add_type_neq_err_label(
+        &self,
+        err: &mut errors::DiagnosticBuilder<'_>,
+        span: Span,
+        ty: Ty<'tcx>,
+        other_ty: Ty<'tcx>,
+        op: hir::BinOp,
+        is_assign: IsAssign,
+    ) -> bool /* did we suggest to call a function because of missing parenthesis? */ {
+        err.span_label(span, ty.to_string());
+        if let FnDef(def_id, _) = ty.sty {
+            if self.tcx.has_typeck_tables(def_id) == false {
+                return false;
+            }
+            let source_map = self.tcx.sess.source_map();
+            let hir_id = &self.tcx.hir().as_local_hir_id(def_id).unwrap();
+            let fn_sig = {
+                match self.tcx.typeck_tables_of(def_id).liberated_fn_sigs().get(*hir_id) {
+                    Some(f) => f.clone(),
+                    None => {
+                        bug!("No fn-sig entry for def_id={:?}", def_id);
+                    }
+                }
+            };
+
+            let other_ty = if let FnDef(def_id, _) = other_ty.sty {
+                if self.tcx.has_typeck_tables(def_id) == false {
+                    return false;
+                }
+                let hir_id = &self.tcx.hir().as_local_hir_id(def_id).unwrap();
+                match self.tcx.typeck_tables_of(def_id).liberated_fn_sigs().get(*hir_id) {
+                    Some(f) => f.clone().output(),
+                    None => {
+                        bug!("No fn-sig entry for def_id={:?}", def_id);
+                    }
+                }
+            } else {
+                other_ty
+            };
+
+            if self.lookup_op_method(fn_sig.output(),
+                                    &[other_ty],
+                                    Op::Binary(op, is_assign))
+                    .is_ok() {
+                let (variable_snippet, applicability) = if fn_sig.inputs().len() > 0 {
+                    (format!("{}( /* arguments */ )", source_map.span_to_snippet(span).unwrap()),
+                    Applicability::HasPlaceholders)
+                } else {
+                    (format!("{}()", source_map.span_to_snippet(span).unwrap()),
+                    Applicability::MaybeIncorrect)
+                };
+
+                err.span_suggestion(
+                    span,
+                    "you might have forgotten to call this function",
+                    variable_snippet,
+                    applicability,
+                );
+                return true;
+            }
+        }
+        false
+    }
+
     fn check_str_addition(
         &self,
         expr: &'gcx hir::Expr,
@@ -418,6 +505,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         rhs_ty: Ty<'tcx>,
         err: &mut errors::DiagnosticBuilder<'_>,
         is_assign: bool,
+        op: hir::BinOp,
     ) -> bool {
         let source_map = self.tcx.sess.source_map();
         let msg = "`to_owned()` can be used to create an owned `String` \
@@ -431,7 +519,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             (&Ref(_, l_ty, _), &Ref(_, r_ty, _))
             if l_ty.sty == Str && r_ty.sty == Str => {
                 if !is_assign {
-                    err.span_label(expr.span,
+                    err.span_label(op.span,
                                    "`+` can't be used to concatenate two `&str` strings");
                     match source_map.span_to_snippet(lhs_expr.span) {
                         Ok(lstring) => err.span_suggestion(

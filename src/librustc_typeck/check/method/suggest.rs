@@ -14,11 +14,11 @@ use rustc::hir::map as hir_map;
 use rustc::hir::print;
 use rustc::infer::type_variable::TypeVariableOrigin;
 use rustc::traits::Obligation;
-use rustc::ty::{self, Adt, Ty, TyCtxt, ToPolyTraitRef, ToPredicate, TypeFoldable};
-use rustc::ty::item_path::with_crate_prefix;
+use rustc::ty::{self, Ty, TyCtxt, ToPolyTraitRef, ToPredicate, TypeFoldable};
+use rustc::ty::print::with_crate_prefix;
 use syntax_pos::{Span, FileName};
 use syntax::ast;
-use syntax::util::lev_distance::find_best_match_for_name;
+use syntax::util::lev_distance;
 
 use std::cmp::Ordering;
 
@@ -60,20 +60,27 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         }
     }
 
-    pub fn report_method_error<'b>(&self,
-                                   span: Span,
-                                   rcvr_ty: Ty<'tcx>,
-                                   item_name: ast::Ident,
-                                   source: SelfSource<'b>,
-                                   error: MethodError<'tcx>,
-                                   args: Option<&'gcx [hir::Expr]>) {
+    pub fn report_method_error<'b>(
+        &self,
+        span: Span,
+        rcvr_ty: Ty<'tcx>,
+        item_name: ast::Ident,
+        source: SelfSource<'b>,
+        error: MethodError<'tcx>,
+        args: Option<&'gcx [hir::Expr]>,
+    ) {
+        let orig_span = span;
+        let mut span = span;
         // Avoid suggestions when we don't know what's going on.
         if rcvr_ty.references_error() {
             return;
         }
 
-        let report_candidates = |err: &mut DiagnosticBuilder<'_>,
-                                 mut sources: Vec<CandidateSource>| {
+        let report_candidates = |
+            span: Span,
+            err: &mut DiagnosticBuilder<'_>,
+            mut sources: Vec<CandidateSource>,
+        | {
             sources.sort();
             sources.dedup();
             // Dynamic limit to avoid hiding just one candidate, which is silly.
@@ -102,7 +109,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             None => String::new(),
                             Some(trait_ref) => {
                                 format!(" of the trait `{}`",
-                                        self.tcx.item_path_str(trait_ref.def_id))
+                                        self.tcx.def_path_str(trait_ref.def_id))
                             }
                         };
 
@@ -135,16 +142,16 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                        item_span,
                                        "candidate #{} is defined in the trait `{}`",
                                        idx + 1,
-                                       self.tcx.item_path_str(trait_did));
+                                       self.tcx.def_path_str(trait_did));
                         } else {
                             span_note!(err,
                                        item_span,
                                        "the candidate is defined in the trait `{}`",
-                                       self.tcx.item_path_str(trait_did));
+                                       self.tcx.def_path_str(trait_did));
                         }
                         err.help(&format!("to disambiguate the method call, write `{}::{}({}{})` \
                                           instead",
-                                          self.tcx.item_path_str(trait_did),
+                                          self.tcx.def_path_str(trait_did),
                                           item_name,
                                           if rcvr_ty.is_region_ptr() && args.is_some() {
                                               if rcvr_ty.is_mutable_pointer() {
@@ -181,17 +188,10 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 let actual = self.resolve_type_vars_if_possible(&rcvr_ty);
                 let ty_str = self.ty_to_string(actual);
                 let is_method = mode == Mode::MethodCall;
-                let mut suggestion = None;
                 let item_kind = if is_method {
                     "method"
                 } else if actual.is_enum() {
-                    if let Adt(ref adt_def, _) = actual.sty {
-                        let names = adt_def.variants.iter().map(|s| &s.ident.name);
-                        suggestion = find_best_match_for_name(names,
-                                                              &item_name.as_str(),
-                                                              None);
-                    }
-                    "variant"
+                    "variant or associated item"
                 } else {
                     match (item_name.as_str().chars().next(), actual.is_fresh_ty()) {
                         (Some(name), false) if name.is_lowercase() => {
@@ -249,14 +249,14 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             ExprKind::Path(ref qpath) => {
                                 // local binding
                                 if let &QPath::Resolved(_, ref path) = &qpath {
-                                    if let hir::def::Def::Local(node_id) = path.def {
-                                        let span = tcx.hir().span(node_id);
+                                    if let hir::def::Def::Local(hir_id) = path.def {
+                                        let span = tcx.hir().span_by_hir_id(hir_id);
                                         let snippet = tcx.sess.source_map().span_to_snippet(span)
                                             .unwrap();
                                         let filename = tcx.sess.source_map().span_to_filename(span);
 
-                                        let parent_node = self.tcx.hir().get(
-                                            self.tcx.hir().get_parent_node(node_id),
+                                        let parent_node = self.tcx.hir().get_by_hir_id(
+                                            self.tcx.hir().get_parent_node_by_hir_id(hir_id),
                                         );
                                         let msg = format!(
                                             "you must specify a type for this binding, like `{}`",
@@ -291,23 +291,28 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         err.emit();
                         return;
                     } else {
+                        span = item_name.span;
                         let mut err = struct_span_err!(
                             tcx.sess,
-                            item_name.span,
+                            span,
                             E0599,
                             "no {} named `{}` found for type `{}` in the current scope",
                             item_kind,
                             item_name,
                             ty_str
                         );
-                        if let Some(suggestion) = suggestion {
-                            // enum variant
-                            err.span_suggestion(
-                                item_name.span,
-                                "did you mean",
-                                suggestion.to_string(),
-                                Applicability::MaybeIncorrect,
-                            );
+                        if let Some(span) = tcx.sess.confused_type_with_std_module.borrow()
+                            .get(&span)
+                        {
+                            if let Ok(snippet) = tcx.sess.source_map().span_to_snippet(*span) {
+                                err.span_suggestion(
+                                    *span,
+                                    "you are looking for the module in `std`, \
+                                     not the primitive type",
+                                    format!("std::{}", snippet),
+                                    Applicability::MachineApplicable,
+                                );
+                            }
                         }
                         err
                     }
@@ -332,47 +337,65 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 // If the method name is the name of a field with a function or closure type,
                 // give a helping note that it has to be called as `(x.f)(...)`.
                 if let SelfSource::MethodCall(expr) = source {
-                    for (ty, _) in self.autoderef(span, rcvr_ty) {
-                        if let ty::Adt(def, substs) = ty.sty {
-                            if !def.is_enum() {
+                    let field_receiver = self
+                        .autoderef(span, rcvr_ty)
+                        .find_map(|(ty, _)| match ty.sty {
+                            ty::Adt(def, substs) if !def.is_enum() => {
                                 let variant = &def.non_enum_variant();
-                                if let Some(index) = self.tcx.find_field_index(item_name, variant) {
+                                self.tcx.find_field_index(item_name, variant).map(|index| {
                                     let field = &variant.fields[index];
-                                    let snippet = tcx.sess.source_map().span_to_snippet(expr.span);
-                                    let expr_string = match snippet {
-                                        Ok(expr_string) => expr_string,
-                                        _ => "s".into(), // Default to a generic placeholder for the
-                                                         // expression when we can't generate a
-                                                         // string snippet.
-                                    };
-
                                     let field_ty = field.ty(tcx, substs);
-                                    let scope = self.tcx.hir().get_module_parent_by_hir_id(
-                                        self.body_id);
-                                    if field.vis.is_accessible_from(scope, self.tcx) {
-                                        if self.is_fn_ty(&field_ty, span) {
-                                            err.help(&format!("use `({0}.{1})(...)` if you \
-                                                               meant to call the function \
-                                                               stored in the `{1}` field",
-                                                              expr_string,
-                                                              item_name));
-                                        } else {
-                                            err.help(&format!("did you mean to write `{0}.{1}` \
-                                                               instead of `{0}.{1}(...)`?",
-                                                              expr_string,
-                                                              item_name));
-                                        }
-                                        err.span_label(span, "field, not a method");
-                                    } else {
-                                        err.span_label(span, "private field, not a method");
-                                    }
-                                    break;
-                                }
+                                    (field, field_ty)
+                                })
+                            }
+                            _ => None,
+                        });
+
+                    if let Some((field, field_ty)) = field_receiver {
+                        let scope = self.tcx.hir().get_module_parent_by_hir_id(self.body_id);
+                        let is_accessible = field.vis.is_accessible_from(scope, self.tcx);
+
+                        if is_accessible {
+                            if self.is_fn_ty(&field_ty, span) {
+                                let expr_span = expr.span.to(item_name.span);
+                                err.multipart_suggestion(
+                                    &format!(
+                                        "to call the function stored in `{}`, \
+                                         surround the field access with parentheses",
+                                        item_name,
+                                    ),
+                                    vec![
+                                        (expr_span.shrink_to_lo(), '('.to_string()),
+                                        (expr_span.shrink_to_hi(), ')'.to_string()),
+                                    ],
+                                    Applicability::MachineApplicable,
+                                );
+                            } else {
+                                let call_expr = self.tcx.hir().expect_expr_by_hir_id(
+                                    self.tcx.hir().get_parent_node_by_hir_id(expr.hir_id),
+                                );
+
+                                let span = call_expr.span.trim_start(item_name.span).unwrap();
+
+                                err.span_suggestion(
+                                    span,
+                                    "remove the arguments",
+                                    String::new(),
+                                    Applicability::MaybeIncorrect,
+                                );
                             }
                         }
+
+                        let field_kind = if is_accessible {
+                            "field"
+                        } else {
+                            "private field"
+                        };
+                        err.span_label(item_name.span, format!("{}, not a method", field_kind));
                     }
                 } else {
                     err.span_label(span, format!("{} not found in `{}`", item_kind, ty_str));
+                    self.tcx.sess.trait_methods_not_found.borrow_mut().insert(orig_span);
                 }
 
                 if self.is_fn_ty(&rcvr_ty, span) {
@@ -414,9 +437,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                           self.ty_to_string(actual), item_name));
                     }
 
-                    report_candidates(&mut err, static_sources);
+                    report_candidates(span, &mut err, static_sources);
                 } else if static_sources.len() > 1 {
-                    report_candidates(&mut err, static_sources);
+                    report_candidates(span, &mut err, static_sources);
                 }
 
                 if !unsatisfied_predicates.is_empty() {
@@ -443,14 +466,36 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                                   out_of_scope_traits);
                 }
 
+                if actual.is_enum() {
+                    let adt_def = actual.ty_adt_def().expect("enum is not an ADT");
+                    if let Some(suggestion) = lev_distance::find_best_match_for_name(
+                        adt_def.variants.iter().map(|s| &s.ident.name),
+                        &item_name.as_str(),
+                        None,
+                    ) {
+                        err.span_suggestion(
+                            span,
+                            "there is a variant with a similar name",
+                            suggestion.to_string(),
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
+                }
+
                 if let Some(lev_candidate) = lev_candidate {
+                    let def = lev_candidate.def();
                     err.span_suggestion(
                         span,
-                        "did you mean",
+                        &format!(
+                            "there is {} {} with a similar name",
+                            def.article(),
+                            def.kind_name(),
+                        ),
                         lev_candidate.ident.to_string(),
                         Applicability::MaybeIncorrect,
                     );
                 }
+
                 err.emit();
             }
 
@@ -461,7 +506,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                                "multiple applicable items in scope");
                 err.span_label(span, format!("multiple `{}` found", item_name));
 
-                report_candidates(&mut err, sources);
+                report_candidates(span, &mut err, sources);
                 err.emit();
             }
 
@@ -516,7 +561,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 };
                 format!(
                     "use {};\n{}",
-                    with_crate_prefix(|| self.tcx.item_path_str(*did)),
+                    with_crate_prefix(|| self.tcx.def_path_str(*did)),
                     additional_newline
                 )
             });
@@ -530,14 +575,14 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         &format!(
                             "\ncandidate #{}: `use {};`",
                             i + 1,
-                            with_crate_prefix(|| self.tcx.item_path_str(*trait_did))
+                            with_crate_prefix(|| self.tcx.def_path_str(*trait_did))
                         )
                     );
                 } else {
                     msg.push_str(
                         &format!(
                             "\n`use {};`",
-                            with_crate_prefix(|| self.tcx.item_path_str(*trait_did))
+                            with_crate_prefix(|| self.tcx.def_path_str(*trait_did))
                         )
                     );
                 }
@@ -638,7 +683,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             for (i, trait_info) in candidates.iter().enumerate() {
                 msg.push_str(&format!("\ncandidate #{}: `{}`",
                                       i + 1,
-                                      self.tcx.item_path_str(trait_info.def_id)));
+                                      self.tcx.def_path_str(trait_info.def_id)));
             }
             err.note(&msg[..]);
         }
@@ -731,9 +776,13 @@ fn compute_all_traits<'a, 'gcx, 'tcx>(tcx: TyCtxt<'a, 'gcx, 'tcx>) -> Vec<DefId>
 
     impl<'v, 'a, 'tcx> itemlikevisit::ItemLikeVisitor<'v> for Visitor<'a, 'tcx> {
         fn visit_item(&mut self, i: &'v hir::Item) {
-            if let hir::ItemKind::Trait(..) = i.node {
-                let def_id = self.map.local_def_id_from_hir_id(i.hir_id);
-                self.traits.push(def_id);
+            match i.node {
+                hir::ItemKind::Trait(..) |
+                hir::ItemKind::TraitAlias(..) => {
+                    let def_id = self.map.local_def_id_from_hir_id(i.hir_id);
+                    self.traits.push(def_id);
+                }
+                _ => ()
             }
         }
 
@@ -755,7 +804,8 @@ fn compute_all_traits<'a, 'gcx, 'tcx>(tcx: TyCtxt<'a, 'gcx, 'tcx>) -> Vec<DefId>
                            external_mods: &mut FxHashSet<DefId>,
                            def: Def) {
         match def {
-            Def::Trait(def_id) => {
+            Def::Trait(def_id) |
+            Def::TraitAlias(def_id) => {
                 traits.push(def_id);
             }
             Def::Mod(def_id) => {
@@ -827,7 +877,7 @@ impl<'a, 'tcx, 'gcx> hir::intravisit::Visitor<'tcx> for UsePlacementFinder<'a, '
         }
         // Find a `use` statement.
         for item_id in &module.item_ids {
-            let item = self.tcx.hir().expect_item(item_id.id);
+            let item = self.tcx.hir().expect_item_by_hir_id(item_id.id);
             match item.node {
                 hir::ItemKind::Use(..) => {
                     // Don't suggest placing a `use` before the prelude

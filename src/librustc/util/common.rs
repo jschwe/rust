@@ -1,17 +1,17 @@
 #![allow(non_camel_case_types)]
 
-use rustc_data_structures::sync::Lock;
+use rustc_data_structures::{fx::FxHashMap, sync::Lock};
 
 use std::cell::{RefCell, Cell};
-use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::{Hash, BuildHasher};
+use std::hash::Hash;
 use std::panic;
 use std::env;
 use std::time::{Duration, Instant};
 
 use std::sync::mpsc::{Sender};
 use syntax_pos::{SpanData};
+use rustc_macros::HashStable;
 use crate::ty::TyCtxt;
 use crate::dep_graph::{DepNode};
 use lazy_static;
@@ -22,7 +22,7 @@ pub const FN_OUTPUT_NAME: &str = "Output";
 
 // Useful type to use with `Result<>` indicate that an error has already
 // been reported to the user, so no need to continue checking.
-#[derive(Clone, Copy, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, Debug, RustcEncodable, RustcDecodable, HashStable)]
 pub struct ErrorReported;
 
 thread_local!(static TIME_DEPTH: Cell<usize> = Cell::new(0));
@@ -340,8 +340,8 @@ pub trait MemoizationMap {
         where OP: FnOnce() -> Self::Value;
 }
 
-impl<K, V, S> MemoizationMap for RefCell<HashMap<K,V,S>>
-    where K: Hash+Eq+Clone, V: Clone, S: BuildHasher
+impl<K, V> MemoizationMap for RefCell<FxHashMap<K,V>>
+    where K: Hash+Eq+Clone, V: Clone
 {
     type Key = K;
     type Value = V;

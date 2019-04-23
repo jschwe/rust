@@ -914,7 +914,7 @@ impl<T> Drop for Sender<T> {
 
 #[stable(feature = "mpsc_debug", since = "1.8.0")]
 impl<T> fmt::Debug for Sender<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sender").finish()
     }
 }
@@ -1005,7 +1005,7 @@ impl<T> SyncSender<T> {
     /// thread::spawn(move || {
     ///     // This will return an error and send
     ///     // no message if the buffer is full
-    ///     sync_sender2.try_send(3).is_err();
+    ///     let _ = sync_sender2.try_send(3);
     /// });
     ///
     /// let mut msg;
@@ -1044,7 +1044,7 @@ impl<T> Drop for SyncSender<T> {
 
 #[stable(feature = "mpsc_debug", since = "1.8.0")]
 impl<T> fmt::Debug for SyncSender<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SyncSender").finish()
     }
 }
@@ -1463,7 +1463,7 @@ impl<T> Receiver<T> {
     /// assert_eq!(iter.next(), None);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn iter(&self) -> Iter<T> {
+    pub fn iter(&self) -> Iter<'_, T> {
         Iter { rx: self }
     }
 
@@ -1506,7 +1506,7 @@ impl<T> Receiver<T> {
     /// assert_eq!(iter.next(), None);
     /// ```
     #[stable(feature = "receiver_try_iter", since = "1.15.0")]
-    pub fn try_iter(&self) -> TryIter<T> {
+    pub fn try_iter(&self) -> TryIter<'_, T> {
         TryIter { rx: self }
     }
 
@@ -1636,21 +1636,21 @@ impl<T> Drop for Receiver<T> {
 
 #[stable(feature = "mpsc_debug", since = "1.8.0")]
 impl<T> fmt::Debug for Receiver<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Receiver").finish()
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T> fmt::Debug for SendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "SendError(..)".fmt(f)
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T> fmt::Display for SendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "sending on a closed channel".fmt(f)
     }
 }
@@ -1668,7 +1668,7 @@ impl<T: Send> error::Error for SendError<T> {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T> fmt::Debug for TrySendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             TrySendError::Full(..) => "Full(..)".fmt(f),
             TrySendError::Disconnected(..) => "Disconnected(..)".fmt(f),
@@ -1678,7 +1678,7 @@ impl<T> fmt::Debug for TrySendError<T> {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T> fmt::Display for TrySendError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             TrySendError::Full(..) => {
                 "sending on a full channel".fmt(f)
@@ -1720,7 +1720,7 @@ impl<T> From<SendError<T>> for TrySendError<T> {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Display for RecvError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "receiving on a closed channel".fmt(f)
     }
 }
@@ -1739,7 +1739,7 @@ impl error::Error for RecvError {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Display for TryRecvError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             TryRecvError::Empty => {
                 "receiving on an empty channel".fmt(f)
@@ -1781,7 +1781,7 @@ impl From<RecvError> for TryRecvError {
 
 #[stable(feature = "mpsc_recv_timeout_error", since = "1.15.0")]
 impl fmt::Display for RecvTimeoutError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             RecvTimeoutError::Timeout => {
                 "timed out waiting on channel".fmt(f)
@@ -1951,7 +1951,7 @@ mod tests {
         for _ in 0..10000 {
             assert_eq!(rx.recv().unwrap(), 1);
         }
-        t.join().ok().unwrap();
+        t.join().ok().expect("thread panicked");
     }
 
     #[test]
@@ -1977,7 +1977,7 @@ mod tests {
             });
         }
         drop(tx);
-        t.join().ok().unwrap();
+        t.join().ok().expect("thread panicked");
     }
 
     #[test]
@@ -1996,8 +1996,8 @@ mod tests {
                 tx2.send(1).unwrap();
             }
         });
-        t1.join().ok().unwrap();
-        t2.join().ok().unwrap();
+        t1.join().ok().expect("thread panicked");
+        t2.join().ok().expect("thread panicked");
     }
 
     #[test]
@@ -2011,7 +2011,7 @@ mod tests {
         for _ in 0..40 {
             tx.send(1).unwrap();
         }
-        t.join().ok().unwrap();
+        t.join().ok().expect("thread panicked");
     }
 
     #[test]
@@ -2026,8 +2026,8 @@ mod tests {
             tx1.send(1).unwrap();
             assert_eq!(rx2.recv().unwrap(), 2);
         });
-        t1.join().ok().unwrap();
-        t2.join().ok().unwrap();
+        t1.join().ok().expect("thread panicked");
+        t2.join().ok().expect("thread panicked");
     }
 
     #[test]
@@ -2225,6 +2225,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn oneshot_single_thread_recv_timeout() {
         let (tx, rx) = channel();
         tx.send(()).unwrap();
@@ -2235,6 +2236,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn stress_recv_timeout_two_threads() {
         let (tx, rx) = channel();
         let stress = stress_factor() + 100;
@@ -2265,6 +2267,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn recv_timeout_upgrade() {
         let (tx, rx) = channel::<()>();
         let timeout = Duration::from_millis(1);
@@ -2276,6 +2279,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn stress_recv_timeout_shared() {
         let (tx, rx) = channel();
         let stress = stress_factor() + 100;
@@ -2306,6 +2310,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn very_long_recv_timeout_wont_panic() {
         let (tx, rx) = channel::<()>();
         let join_handle = thread::spawn(move || {
@@ -2325,6 +2330,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn shared_recv_timeout() {
         let (tx, rx) = channel();
         let total = 5;
@@ -2550,6 +2556,7 @@ mod sync_tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn recv_timeout() {
         let (tx, rx) = sync_channel::<i32>(1);
         assert_eq!(rx.recv_timeout(Duration::from_millis(1)), Err(RecvTimeoutError::Timeout));
@@ -2639,6 +2646,7 @@ mod sync_tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn stress_recv_timeout_two_threads() {
         let (tx, rx) = sync_channel::<i32>(0);
 
@@ -2662,6 +2670,7 @@ mod sync_tests {
     }
 
     #[test]
+    #[cfg_attr(target_env = "sgx", ignore)] // FIXME: https://github.com/fortanix/rust-sgx/issues/31
     fn stress_recv_timeout_shared() {
         const AMT: u32 = 1000;
         const NTHREADS: u32 = 8;

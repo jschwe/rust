@@ -10,6 +10,7 @@ use rustc::mir::{
     Projection, ProjectionElem, Rvalue, Statement, StatementKind, TerminatorKind,
 };
 use rustc::ty::{self, TyCtxt};
+use rustc::ty::adjustment::{PointerCast};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::DiagnosticBuilder;
 use syntax_pos::Span;
@@ -56,17 +57,23 @@ impl BorrowExplanation {
         mir: &Mir<'tcx>,
         err: &mut DiagnosticBuilder<'_>,
         borrow_desc: &str,
+        borrow_span: Option<Span>,
     ) {
         match *self {
             BorrowExplanation::UsedLater(later_use_kind, var_or_use_span) => {
                 let message = match later_use_kind {
-                    LaterUseKind::TraitCapture => "borrow later captured here by trait object",
-                    LaterUseKind::ClosureCapture => "borrow later captured here by closure",
-                    LaterUseKind::Call => "borrow later used by call",
-                    LaterUseKind::FakeLetRead => "borrow later stored here",
-                    LaterUseKind::Other => "borrow later used here",
+                    LaterUseKind::TraitCapture => "captured here by trait object",
+                    LaterUseKind::ClosureCapture => "captured here by closure",
+                    LaterUseKind::Call => "used by call",
+                    LaterUseKind::FakeLetRead => "stored here",
+                    LaterUseKind::Other => "used here",
                 };
-                err.span_label(var_or_use_span, format!("{}{}", borrow_desc, message));
+                if !borrow_span.map(|sp| sp.overlaps(var_or_use_span)).unwrap_or(false) {
+                    err.span_label(
+                        var_or_use_span,
+                        format!("{}borrow later {}", borrow_desc, message),
+                    );
+                }
             }
             BorrowExplanation::UsedLaterInLoop(later_use_kind, var_or_use_span) => {
                 let message = match later_use_kind {
@@ -93,7 +100,7 @@ impl BorrowExplanation {
                     // simplify output by reporting just the ADT name.
                     ty::Adt(adt, _substs) if adt.has_dtor(tcx) && !adt.is_box() => (
                         "`Drop` code",
-                        format!("type `{}`", tcx.item_path_str(adt.did)),
+                        format!("type `{}`", tcx.def_path_str(adt.did)),
                     ),
 
                     // Otherwise, just report the whole type (and use
@@ -574,7 +581,9 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                         },
                         // If we see a unsized cast, then if it is our data we should check
                         // whether it is being cast to a trait object.
-                        Rvalue::Cast(CastKind::Unsize, operand, ty) => match operand {
+                        Rvalue::Cast(
+                            CastKind::Pointer(PointerCast::Unsize), operand, ty
+                        ) => match operand {
                             Operand::Copy(Place::Base(PlaceBase::Local(from)))
                             | Operand::Move(Place::Base(PlaceBase::Local(from)))
                                 if *from == target =>
@@ -583,7 +592,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                                 // Check the type for a trait object.
                                 return match ty.sty {
                                     // `&dyn Trait`
-                                    ty::TyKind::Ref(_, ty, _) if ty.is_trait() => true,
+                                    ty::Ref(_, ty, _) if ty.is_trait() => true,
                                     // `Box<dyn Trait>`
                                     _ if ty.is_box() && ty.boxed_ty().is_trait() => true,
                                     // `dyn Trait`

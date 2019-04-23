@@ -29,10 +29,10 @@ use rustc::util::nodemap::{DefIdMap, FxHashMap, FxHashSet};
 use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_codegen_ssa::debuginfo::{FunctionDebugContext, MirDebugScope, VariableAccess,
-    VariableKind, FunctionDebugContextData};
+    VariableKind, FunctionDebugContextData, type_names};
 
 use libc::c_uint;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ffi::CString;
 
 use syntax_pos::{self, Span, Pos};
@@ -44,7 +44,6 @@ use rustc_codegen_ssa::traits::*;
 pub mod gdb;
 mod utils;
 mod namespace;
-mod type_names;
 pub mod metadata;
 mod create_scope_map;
 mod source_loc;
@@ -158,7 +157,7 @@ impl DebugInfoBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
         variable_kind: VariableKind,
         span: Span,
     ) {
-        assert!(!dbg_context.get_ref(span).source_locations_enabled.get());
+        assert!(!dbg_context.get_ref(span).source_locations_enabled);
         let cx = self.cx();
 
         let file = span_start(cx, span).file;
@@ -216,7 +215,7 @@ impl DebugInfoBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
 
     fn set_source_location(
         &mut self,
-        debug_context: &FunctionDebugContext<&'ll DISubprogram>,
+        debug_context: &mut FunctionDebugContext<&'ll DISubprogram>,
         scope: Option<&'ll DIScope>,
         span: Span,
     ) {
@@ -224,6 +223,13 @@ impl DebugInfoBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
     }
     fn insert_reference_to_gdb_debug_scripts_section_global(&mut self) {
         gdb::insert_reference_to_gdb_debug_scripts_section_global(self)
+    }
+
+    fn set_value_name(&mut self, value: &'ll Value, name: &str) {
+        let cname = SmallCStr::new(name);
+        unsafe {
+            llvm::LLVMSetValueName(value, cname.as_ptr());
+        }
     }
 }
 
@@ -289,12 +295,6 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
 
         let mut flags = DIFlags::FlagPrototyped;
 
-        if let Some((id, _)) = self.tcx.entry_fn(LOCAL_CRATE) {
-            if id == def_id {
-                flags |= DIFlags::FlagMainSubprogram;
-            }
-        }
-
         if self.layout_of(sig.output()).abi.is_uninhabited() {
             flags |= DIFlags::FlagNoReturn;
         }
@@ -305,6 +305,11 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         }
         if self.sess().opts.optimize != config::OptLevel::No {
             spflags |= DISPFlags::SPFlagOptimized;
+        }
+        if let Some((id, _)) = self.tcx.entry_fn(LOCAL_CRATE) {
+            if id == def_id {
+                spflags |= DISPFlags::SPFlagMainSubprogram;
+            }
         }
 
         let fn_metadata = unsafe {
@@ -327,7 +332,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         // Initialize fn debug context (including scope map and namespace map)
         let fn_debug_context = FunctionDebugContextData {
             fn_metadata,
-            source_locations_enabled: Cell::new(false),
+            source_locations_enabled: false,
             defining_crate: def_id.krate,
         };
 
@@ -416,7 +421,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                 let actual_type =
                     cx.tcx.normalize_erasing_regions(ParamEnv::reveal_all(), actual_type);
                 // Add actual type name to <...> clause of function name
-                let actual_type_name = compute_debuginfo_type_name(cx,
+                let actual_type_name = compute_debuginfo_type_name(cx.tcx(),
                                                                    actual_type,
                                                                    true);
                 name_to_append_suffix_to.push_str(&actual_type_name[..]);
@@ -519,7 +524,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
     fn create_mir_scopes(
         &self,
         mir: &mir::Mir<'_>,
-        debug_context: &FunctionDebugContext<&'ll DISubprogram>,
+        debug_context: &mut FunctionDebugContext<&'ll DISubprogram>,
     ) -> IndexVec<mir::SourceScope, MirDebugScope<&'ll DIScope>> {
         create_scope_map::create_mir_scopes(self, mir, debug_context)
     }

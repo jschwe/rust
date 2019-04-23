@@ -8,7 +8,7 @@
 //!
 //! The [`Command`] struct is used to configure and spawn processes:
 //!
-//! ```
+//! ```no_run
 //! use std::process::Command;
 //!
 //! let output = Command::new("echo")
@@ -111,7 +111,7 @@ use crate::io::prelude::*;
 use crate::ffi::OsStr;
 use crate::fmt;
 use crate::fs;
-use crate::io::{self, Initializer};
+use crate::io::{self, Initializer, IoVec, IoVecMut};
 use crate::path::Path;
 use crate::str;
 use crate::sys::pipe::{read2, AnonPipe};
@@ -194,7 +194,7 @@ impl IntoInner<imp::Process> for Child {
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for Child {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Child")
             .field("stdin", &self.stdin)
             .field("stdout", &self.stdout)
@@ -225,6 +225,10 @@ impl Write for ChildStdin {
         self.inner.write(buf)
     }
 
+    fn write_vectored(&mut self, bufs: &[IoVec<'_>]) -> io::Result<usize> {
+        self.inner.write_vectored(bufs)
+    }
+
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -246,7 +250,7 @@ impl FromInner<AnonPipe> for ChildStdin {
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for ChildStdin {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("ChildStdin { .. }")
     }
 }
@@ -271,6 +275,11 @@ impl Read for ChildStdout {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read(buf)
     }
+
+    fn read_vectored(&mut self, bufs: &mut [IoVecMut<'_>]) -> io::Result<usize> {
+        self.inner.read_vectored(bufs)
+    }
+
     #[inline]
     unsafe fn initializer(&self) -> Initializer {
         Initializer::nop()
@@ -293,7 +302,7 @@ impl FromInner<AnonPipe> for ChildStdout {
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for ChildStdout {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("ChildStdout { .. }")
     }
 }
@@ -318,6 +327,11 @@ impl Read for ChildStderr {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read(buf)
     }
+
+    fn read_vectored(&mut self, bufs: &mut [IoVecMut<'_>]) -> io::Result<usize> {
+        self.inner.read_vectored(bufs)
+    }
+
     #[inline]
     unsafe fn initializer(&self) -> Initializer {
         Initializer::nop()
@@ -340,7 +354,7 @@ impl FromInner<AnonPipe> for ChildStderr {
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for ChildStderr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("ChildStderr { .. }")
     }
 }
@@ -803,7 +817,7 @@ impl fmt::Debug for Command {
     /// Format the program and arguments of a Command for display. Any
     /// non-utf8 data is lossily converted using the utf8 replacement
     /// character.
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }
@@ -844,7 +858,7 @@ pub struct Output {
 // strings, otherwise it prints the byte sequence instead
 #[stable(feature = "process_output_debug", since = "1.7.0")]
 impl fmt::Debug for Output {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
 
         let stdout_utf8 = str::from_utf8(&self.stdout);
         let stdout_debug: &dyn fmt::Debug = match stdout_utf8 {
@@ -1002,7 +1016,7 @@ impl FromInner<imp::Stdio> for Stdio {
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for Stdio {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("Stdio { .. }")
     }
 }
@@ -1199,7 +1213,7 @@ impl FromInner<imp::ExitStatus> for ExitStatus {
 
 #[stable(feature = "process", since = "1.0.0")]
 impl fmt::Display for ExitStatus {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
@@ -1621,7 +1635,7 @@ impl Termination for ExitCode {
     }
 }
 
-#[cfg(all(test, not(any(target_os = "cloudabi", target_os = "emscripten"))))]
+#[cfg(all(test, not(any(target_os = "cloudabi", target_os = "emscripten", target_env = "sgx"))))]
 mod tests {
     use crate::io::prelude::*;
 

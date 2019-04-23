@@ -11,6 +11,7 @@ use rustc::middle::cstore::{CrateStore, DepKind,
 use rustc::middle::exported_symbols::ExportedSymbol;
 use rustc::middle::stability::DeprecationEntry;
 use rustc::hir::def;
+use rustc::hir;
 use rustc::session::{CrateDisambiguator, Session};
 use rustc::ty::{self, TyCtxt};
 use rustc::ty::query::Providers;
@@ -136,6 +137,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     inherent_impls => { Lrc::new(cdata.get_inherent_implementations_for_type(def_id.index)) }
     is_const_fn_raw => { cdata.is_const_fn_raw(def_id.index) }
     is_foreign_item => { cdata.is_foreign_item(def_id.index) }
+    static_mutability => { cdata.static_mutability(def_id.index) }
     describe_def => { cdata.get_def(def_id.index) }
     def_span => { cdata.get_span(def_id.index, &tcx.sess) }
     lookup_stability => {
@@ -347,7 +349,7 @@ pub fn provide<'tcx>(providers: &mut Providers<'tcx>) {
             {
                 let visible_parent_map = &mut visible_parent_map;
                 let mut add_child = |bfs_queue: &mut VecDeque<_>,
-                                     child: &def::Export,
+                                     child: &def::Export<hir::HirId>,
                                      parent: DefId| {
                     if child.vis != ty::Visibility::Public {
                         return;
@@ -407,7 +409,19 @@ impl cstore::CStore {
         self.get_crate_data(def.krate).get_struct_field_names(def.index)
     }
 
-    pub fn item_children_untracked(&self, def_id: DefId, sess: &Session) -> Vec<def::Export> {
+    pub fn ctor_kind_untracked(&self, def: DefId) -> def::CtorKind {
+        self.get_crate_data(def.krate).get_ctor_kind(def.index)
+    }
+
+    pub fn item_attrs_untracked(&self, def: DefId, sess: &Session) -> Lrc<[ast::Attribute]> {
+        self.get_crate_data(def.krate).get_item_attrs(def.index, sess)
+    }
+
+    pub fn item_children_untracked(
+        &self,
+        def_id: DefId,
+        sess: &Session
+    ) -> Vec<def::Export<hir::HirId>> {
         let mut result = vec![];
         self.get_crate_data(def_id.krate)
             .each_child_of_item(def_id.index, |child| result.push(child), sess);
@@ -439,8 +453,8 @@ impl cstore::CStore {
 
         let source_file = sess.parse_sess.source_map().new_source_file(source_name, def.body);
         let local_span = Span::new(source_file.start_pos, source_file.end_pos, NO_EXPANSION);
-        let (body, errors) = source_file_to_stream(&sess.parse_sess, source_file, None);
-        emit_unclosed_delims(&errors, &sess.diagnostic());
+        let (body, mut errors) = source_file_to_stream(&sess.parse_sess, source_file, None);
+        emit_unclosed_delims(&mut errors, &sess.diagnostic());
 
         // Mark the attrs as used
         let attrs = data.get_item_attrs(id.index, sess);
@@ -484,6 +498,10 @@ impl CrateStore for cstore::CStore {
     fn crate_name_untracked(&self, cnum: CrateNum) -> Symbol
     {
         self.get_crate_data(cnum).name
+    }
+
+    fn crate_is_private_dep_untracked(&self, cnum: CrateNum) -> bool {
+        self.get_crate_data(cnum).private_dep
     }
 
     fn crate_disambiguator_untracked(&self, cnum: CrateNum) -> CrateDisambiguator

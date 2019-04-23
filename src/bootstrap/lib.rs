@@ -190,6 +190,7 @@ const LLVM_TOOLS: &[&str] = &[
     "llvm-readobj", // used to get information from ELFs/objects that the other tools don't provide
     "llvm-size", // used to prints the size of the linker sections of a program
     "llvm-strip", // used to discard symbols from binary files to reduce their size
+    "llvm-ar" // used for creating and modifying archive files
 ];
 
 /// A structure representing a Rust compiler.
@@ -241,6 +242,8 @@ pub struct Build {
     clippy_info: channel::GitInfo,
     miri_info: channel::GitInfo,
     rustfmt_info: channel::GitInfo,
+    in_tree_llvm_info: channel::GitInfo,
+    emscripten_llvm_info: channel::GitInfo,
     local_rebuild: bool,
     fail_fast: bool,
     doc_tests: DocTests,
@@ -357,12 +360,18 @@ impl Build {
             }
             None => false,
         };
-        let rust_info = channel::GitInfo::new(&config, &src);
-        let cargo_info = channel::GitInfo::new(&config, &src.join("src/tools/cargo"));
-        let rls_info = channel::GitInfo::new(&config, &src.join("src/tools/rls"));
-        let clippy_info = channel::GitInfo::new(&config, &src.join("src/tools/clippy"));
-        let miri_info = channel::GitInfo::new(&config, &src.join("src/tools/miri"));
-        let rustfmt_info = channel::GitInfo::new(&config, &src.join("src/tools/rustfmt"));
+
+        let ignore_git = config.ignore_git;
+        let rust_info = channel::GitInfo::new(ignore_git, &src);
+        let cargo_info = channel::GitInfo::new(ignore_git, &src.join("src/tools/cargo"));
+        let rls_info = channel::GitInfo::new(ignore_git, &src.join("src/tools/rls"));
+        let clippy_info = channel::GitInfo::new(ignore_git, &src.join("src/tools/clippy"));
+        let miri_info = channel::GitInfo::new(ignore_git, &src.join("src/tools/miri"));
+        let rustfmt_info = channel::GitInfo::new(ignore_git, &src.join("src/tools/rustfmt"));
+
+        // we always try to use git for LLVM builds
+        let in_tree_llvm_info = channel::GitInfo::new(false, &src.join("src/llvm-project"));
+        let emscripten_llvm_info = channel::GitInfo::new(false, &src.join("src/llvm-emscripten"));
 
         let mut build = Build {
             initial_rustc: config.initial_rustc.clone(),
@@ -386,6 +395,8 @@ impl Build {
             clippy_info,
             miri_info,
             rustfmt_info,
+            in_tree_llvm_info,
+            emscripten_llvm_info,
             cc: HashMap::new(),
             cxx: HashMap::new(),
             ar: HashMap::new(),
@@ -495,6 +506,9 @@ impl Build {
     fn std_features(&self) -> String {
         let mut features = "panic-unwind".to_string();
 
+        if self.config.llvm_libunwind {
+            features.push_str(" llvm-libunwind");
+        }
         if self.config.backtrace {
             features.push_str(" backtrace");
         }
@@ -720,6 +734,17 @@ impl Build {
         }
     }
 
+    pub fn is_verbose_than(&self, level: usize) -> bool {
+        self.verbosity > level
+    }
+
+    /// Prints a message if this build is configured in more verbose mode than `level`.
+    fn verbose_than(&self, level: usize, msg: &str) {
+        if self.is_verbose_than(level) {
+            println!("{}", msg);
+        }
+    }
+
     fn info(&self, msg: &str) {
         if self.config.dry_run { return; }
         println!("{}", msg);
@@ -840,6 +865,13 @@ impl Build {
         self.config.target_config.get(&target)
             .and_then(|t| t.musl_root.as_ref())
             .or(self.config.musl_root.as_ref())
+            .map(|p| &**p)
+    }
+
+    /// Returns the sysroot for the wasi target, if defined
+    fn wasi_root(&self, target: Interned<String>) -> Option<&Path> {
+        self.config.target_config.get(&target)
+            .and_then(|t| t.wasi_root.as_ref())
             .map(|p| &**p)
     }
 
@@ -1093,8 +1125,6 @@ impl Build {
     /// `rust.save-toolstates` in `config.toml`. If unspecified, nothing will be
     /// done. The file is updated immediately after this function completes.
     pub fn save_toolstate(&self, tool: &str, state: ToolState) {
-        use std::io::{Seek, SeekFrom};
-
         if let Some(ref path) = self.config.save_toolstates {
             let mut file = t!(fs::OpenOptions::new()
                 .create(true)
@@ -1129,7 +1159,7 @@ impl Build {
         ret
     }
 
-    fn read_stamp_file(&self, stamp: &Path) -> Vec<PathBuf> {
+    fn read_stamp_file(&self, stamp: &Path) -> Vec<(PathBuf, bool)> {
         if self.config.dry_run {
             return Vec::new();
         }
@@ -1142,8 +1172,9 @@ impl Build {
             if part.is_empty() {
                 continue
             }
-            let path = PathBuf::from(t!(str::from_utf8(part)));
-            paths.push(path);
+            let host = part[0] as char == 'h';
+            let path = PathBuf::from(t!(str::from_utf8(&part[1..])));
+            paths.push((path, host));
         }
         paths
     }
@@ -1151,6 +1182,7 @@ impl Build {
     /// Copies a file from `src` to `dst`
     pub fn copy(&self, src: &Path, dst: &Path) {
         if self.config.dry_run { return; }
+        self.verbose_than(1, &format!("Copy {:?} to {:?}", src, dst));
         let _ = fs::remove_file(&dst);
         let metadata = t!(src.symlink_metadata());
         if metadata.file_type().is_symlink() {
@@ -1244,6 +1276,7 @@ impl Build {
     fn install(&self, src: &Path, dstdir: &Path, perms: u32) {
         if self.config.dry_run { return; }
         let dst = dstdir.join(src.file_name().unwrap());
+        self.verbose_than(1, &format!("Install {:?} to {:?}", src, dst));
         t!(fs::create_dir_all(dstdir));
         drop(fs::remove_file(&dst));
         {

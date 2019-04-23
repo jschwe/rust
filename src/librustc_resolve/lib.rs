@@ -4,10 +4,12 @@
 #![feature(label_break_value)]
 #![feature(nll)]
 #![feature(rustc_diagnostic_macros)]
+#![feature(type_alias_enum_variants)]
 
 #![recursion_limit="256"]
 
 #![deny(rust_2018_idioms)]
+#![deny(internal)]
 
 pub use rustc::hir::def::{Namespace, PerNS};
 
@@ -19,7 +21,9 @@ use rustc::hir::{self, PrimTy, Bool, Char, Float, Int, Uint, Str};
 use rustc::middle::cstore::CrateStore;
 use rustc::session::Session;
 use rustc::lint;
-use rustc::hir::def::*;
+use rustc::hir::def::{
+    self, PathResolution, CtorKind, CtorOf, NonMacroAttrKind, DefMap, ImportMap, ExportMap
+};
 use rustc::hir::def::Namespace::*;
 use rustc::hir::def_id::{CRATE_DEF_INDEX, LOCAL_CRATE, DefId};
 use rustc::hir::{Freevar, FreevarMap, TraitCandidate, TraitMap, GlobMap};
@@ -49,7 +53,7 @@ use syntax::ast::{QSelf, TraitItemKind, TraitRef, Ty, TyKind};
 use syntax::ptr::P;
 use syntax::{span_err, struct_span_err, unwrap_or, walk_list};
 
-use syntax_pos::{BytePos, Span, DUMMY_SP, MultiSpan};
+use syntax_pos::{Span, DUMMY_SP, MultiSpan};
 use errors::{Applicability, DiagnosticBuilder, DiagnosticId};
 
 use log::debug;
@@ -61,13 +65,16 @@ use std::mem::replace;
 use rustc_data_structures::ptr_key::PtrKey;
 use rustc_data_structures::sync::Lrc;
 
+use diagnostics::{find_span_of_binding_until_next_binding, extend_span_to_previous_binding};
 use resolve_imports::{ImportDirective, ImportDirectiveSubclass, NameResolution, ImportResolver};
 use macros::{InvocationData, LegacyBinding, ParentScope};
 
+type Def = def::Def<NodeId>;
+
 // N.B., this module needs to be declared first so diagnostics are
 // registered before they are used.
+mod error_codes;
 mod diagnostics;
-mod error_reporting;
 mod macros;
 mod check_unused;
 mod build_reduced_graph;
@@ -137,6 +144,9 @@ impl Ord for BindingError {
     }
 }
 
+/// A vector of spans and replacements, a message and applicability.
+type Suggestion = (Vec<(Span, String)>, String, Applicability);
+
 enum ResolutionError<'a> {
     /// Error E0401: can't use type or const parameters from outer function.
     GenericParamsFromOuterFunction(Def),
@@ -166,7 +176,7 @@ enum ResolutionError<'a> {
     /// Error E0431: `self` import can only appear in an import list with a non-empty prefix.
     SelfImportOnlyInImportListWithNonEmptyPrefix,
     /// Error E0433: failed to resolve.
-    FailedToResolve(&'a str),
+    FailedToResolve { label: String, suggestion: Option<Suggestion> },
     /// Error E0434: can't capture dynamic environment in a fn item.
     CannotCaptureDynamicEnvironmentInFnItem,
     /// Error E0435: attempt to use a non-constant value in a constant.
@@ -224,12 +234,12 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver<'_>,
                 },
                 Def::TyParam(def_id) => {
                     if let Some(span) = resolver.definitions.opt_span(def_id) {
-                        err.span_label(span, "type variable from outer function");
+                        err.span_label(span, "type parameter from outer function");
                     }
                 }
                 Def::ConstParam(def_id) => {
                     if let Some(span) = resolver.definitions.opt_span(def_id) {
-                        err.span_label(span, "const variable from outer function");
+                        err.span_label(span, "const parameter from outer function");
                     }
                 }
                 _ => {
@@ -380,10 +390,15 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver<'_>,
             err.span_label(span, "can only appear in an import list with a non-empty prefix");
             err
         }
-        ResolutionError::FailedToResolve(msg) => {
+        ResolutionError::FailedToResolve { label, suggestion } => {
             let mut err = struct_span_err!(resolver.session, span, E0433,
-                                           "failed to resolve: {}", msg);
-            err.span_label(span, msg);
+                                           "failed to resolve: {}", &label);
+            err.span_label(span, label);
+
+            if let Some((suggestions, msg, applicability)) = suggestion {
+                err.multipart_suggestion(&msg, suggestions, applicability);
+            }
+
             err
         }
         ResolutionError::CannotCaptureDynamicEnvironmentInFnItem => {
@@ -563,24 +578,20 @@ impl<'a> PathSource<'a> {
                 _ => false,
             },
             PathSource::Expr(..) => match def {
-                Def::StructCtor(_, CtorKind::Const) | Def::StructCtor(_, CtorKind::Fn) |
-                Def::VariantCtor(_, CtorKind::Const) | Def::VariantCtor(_, CtorKind::Fn) |
+                Def::Ctor(_, _, CtorKind::Const) | Def::Ctor(_, _, CtorKind::Fn) |
                 Def::Const(..) | Def::Static(..) | Def::Local(..) | Def::Upvar(..) |
                 Def::Fn(..) | Def::Method(..) | Def::AssociatedConst(..) |
                 Def::SelfCtor(..) | Def::ConstParam(..) => true,
                 _ => false,
             },
             PathSource::Pat => match def {
-                Def::StructCtor(_, CtorKind::Const) |
-                Def::VariantCtor(_, CtorKind::Const) |
+                Def::Ctor(_, _, CtorKind::Const) |
                 Def::Const(..) | Def::AssociatedConst(..) |
                 Def::SelfCtor(..) => true,
                 _ => false,
             },
             PathSource::TupleStruct => match def {
-                Def::StructCtor(_, CtorKind::Fn) |
-                Def::VariantCtor(_, CtorKind::Fn) |
-                Def::SelfCtor(..) => true,
+                Def::Ctor(_, _, CtorKind::Fn) | Def::SelfCtor(..) => true,
                 _ => false,
             },
             PathSource::Struct => match def {
@@ -806,7 +817,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Resolver<'a> {
         debug!("(resolving function) entering function");
         let (rib_kind, asyncness) = match function_kind {
             FnKind::ItemFn(_, ref header, ..) =>
-                (ItemRibKind, header.asyncness.node),
+                (FnItemRibKind, header.asyncness.node),
             FnKind::Method(_, ref sig, _, _) =>
                 (TraitOrImplItemRibKind, sig.header.asyncness.node),
             FnKind::Closure(_) =>
@@ -942,6 +953,10 @@ enum RibKind<'a> {
     /// upvars).
     TraitOrImplItemRibKind,
 
+    /// We passed through a function definition. Disallow upvars.
+    /// Permit only those const parameters that are specified in the function's generics.
+    FnItemRibKind,
+
     /// We passed through an item scope. Disallow upvars.
     ItemRibKind,
 
@@ -1050,7 +1065,12 @@ enum PathResult<'a> {
     Module(ModuleOrUniformRoot<'a>),
     NonModule(PathResolution),
     Indeterminate,
-    Failed(Span, String, bool /* is the error from the last segment? */),
+    Failed {
+        span: Span,
+        label: String,
+        suggestion: Option<Suggestion>,
+        is_error_from_last_segment: bool,
+    },
 }
 
 enum ModuleKind {
@@ -1075,6 +1095,16 @@ enum ModuleKind {
     /// * A trait or an enum (it implicitly contains associated types, methods and variant
     ///   constructors).
     Def(Def, Name),
+}
+
+impl ModuleKind {
+    /// Get name of the module.
+    pub fn name(&self) -> Option<Name> {
+        match self {
+            ModuleKind::Block(..) => None,
+            ModuleKind::Def(_, name) => Some(*name),
+        }
+    }
 }
 
 /// One node in the tree of modules.
@@ -1260,7 +1290,6 @@ struct UseError<'a> {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum AmbiguityKind {
     Import,
-    AbsolutePath,
     BuiltinAttr,
     DeriveHelper,
     LegacyHelperVsPrelude,
@@ -1276,8 +1305,6 @@ impl AmbiguityKind {
         match self {
             AmbiguityKind::Import =>
                 "name vs any other name during import resolution",
-            AmbiguityKind::AbsolutePath =>
-                "name in the crate root vs extern crate during absolute path resolution",
             AmbiguityKind::BuiltinAttr =>
                 "built-in attribute vs any other name",
             AmbiguityKind::DeriveHelper =>
@@ -1342,7 +1369,7 @@ impl<'a> NameBinding<'a> {
         }
     }
 
-    // We sometimes need to treat variants as `pub` for backwards compatibility
+    // We sometimes need to treat variants as `pub` for backwards compatibility.
     fn pseudo_vis(&self) -> ty::Visibility {
         if self.is_variant() && self.def().def_id().is_local() {
             ty::Visibility::Public
@@ -1354,7 +1381,7 @@ impl<'a> NameBinding<'a> {
     fn is_variant(&self) -> bool {
         match self.kind {
             NameBindingKind::Def(Def::Variant(..), _) |
-            NameBindingKind::Def(Def::VariantCtor(..), _) => true,
+            NameBindingKind::Def(Def::Ctor(_, CtorOf::Variant, ..), _) => true,
             _ => false,
         }
     }
@@ -1541,7 +1568,7 @@ pub struct Resolver<'a> {
     import_map: ImportMap,
     pub freevars: FreevarMap,
     freevars_seen: NodeMap<NodeMap<usize>>,
-    pub export_map: ExportMap,
+    pub export_map: ExportMap<NodeId>,
     pub trait_map: TraitMap,
 
     /// A map from nodes to anonymous modules.
@@ -1687,7 +1714,12 @@ impl<'a> hir::lowering::Resolver for Resolver<'a> {
         components: &[&str],
         is_value: bool
     ) -> hir::Path {
-        let segments = iter::once(keywords::PathRoot.ident())
+        let root = if crate_root.is_some() {
+            keywords::PathRoot
+        } else {
+            keywords::Crate
+        };
+        let segments = iter::once(root.ident())
             .chain(
                 crate_root.into_iter()
                     .chain(components.iter().cloned())
@@ -1723,7 +1755,6 @@ impl<'a> Resolver<'a> {
     /// just that an error occurred.
     pub fn resolve_str_path_error(&mut self, span: Span, path_str: &str, is_value: bool)
         -> Result<hir::Path, ()> {
-        use std::iter;
         let mut errored = false;
 
         let path = if path_str.starts_with("::") {
@@ -1747,7 +1778,7 @@ impl<'a> Resolver<'a> {
             }
         };
         let path = self.resolve_hir_path_cb(&path, is_value, |_, _, _| errored = true);
-        if errored || path.def == Def::Err {
+        if errored || path.def == def::Def::Err {
             Err(())
         } else {
             Ok(path)
@@ -1775,25 +1806,32 @@ impl<'a> Resolver<'a> {
             PathResult::NonModule(path_res) if path_res.unresolved_segments() == 0 =>
                 path_res.base_def(),
             PathResult::NonModule(..) => {
-                let msg = "type-relative paths are not supported in this context";
-                error_callback(self, span, ResolutionError::FailedToResolve(msg));
+                error_callback(self, span, ResolutionError::FailedToResolve {
+                    label: String::from("type-relative paths are not supported in this context"),
+                    suggestion: None,
+                });
                 Def::Err
             }
             PathResult::Module(..) | PathResult::Indeterminate => unreachable!(),
-            PathResult::Failed(span, msg, _) => {
-                error_callback(self, span, ResolutionError::FailedToResolve(&msg));
+            PathResult::Failed { span, label, suggestion, .. } => {
+                error_callback(self, span, ResolutionError::FailedToResolve {
+                    label,
+                    suggestion,
+                });
                 Def::Err
             }
         };
 
         let segments: Vec<_> = segments.iter().map(|seg| {
             let mut hir_seg = hir::PathSegment::from_ident(seg.ident);
-            hir_seg.def = Some(self.def_map.get(&seg.id).map_or(Def::Err, |p| p.base_def()));
+            hir_seg.def = Some(self.def_map.get(&seg.id).map_or(def::Def::Err, |p| {
+                p.base_def().map_id(|_| panic!("unexpected node_id"))
+            }));
             hir_seg
         }).collect();
         hir::Path {
             span,
-            def,
+            def: def.map_id(|_| panic!("unexpected node_id")),
             segments: segments.into(),
         }
     }
@@ -2695,7 +2733,7 @@ impl<'a> Resolver<'a> {
     {
         let mut self_type_rib = Rib::new(NormalRibKind);
 
-        // plain insert (no renaming, types are not currently hygienic....)
+        // Plain insert (no renaming, since types are not currently hygienic)
         self_type_rib.bindings.insert(keywords::SelfUpper.ident(), self_def);
         self.ribs[TypeNS].push(self_type_rib);
         f(self);
@@ -3074,16 +3112,14 @@ impl<'a> Resolver<'a> {
                         let is_syntactic_ambiguity = opt_pat.is_none() &&
                             bmode == BindingMode::ByValue(Mutability::Immutable);
                         match def {
-                            Def::StructCtor(_, CtorKind::Const) |
-                            Def::VariantCtor(_, CtorKind::Const) |
+                            Def::Ctor(_, _, CtorKind::Const) |
                             Def::Const(..) if is_syntactic_ambiguity => {
                                 // Disambiguate in favor of a unit struct/variant
                                 // or constant pattern.
                                 self.record_use(ident, ValueNS, binding.unwrap(), false);
                                 Some(PathResolution::new(def))
                             }
-                            Def::StructCtor(..) | Def::VariantCtor(..) |
-                            Def::Const(..) | Def::Static(..) => {
+                            Def::Ctor(..) | Def::Const(..) | Def::Static(..) => {
                                 // This is unambiguously a fresh binding, either syntactically
                                 // (e.g., `IDENT @ PAT` or `ref IDENT`) or because `IDENT` resolves
                                 // to something unusable as a pattern (e.g., constructor function),
@@ -3237,6 +3273,25 @@ impl<'a> Resolver<'a> {
                     let traits = self.get_traits_containing_item(item_name, ns);
                     self.trait_map.insert(id, traits);
                 }
+
+                let mut std_path = vec![Segment::from_ident(Ident::from_str("std"))];
+                std_path.extend(path);
+                if self.primitive_type_table.primitive_types.contains_key(&path[0].ident.name) {
+                    let cl = CrateLint::No;
+                    let ns = Some(ns);
+                    if let PathResult::Module(_) | PathResult::NonModule(_) =
+                        self.resolve_path_without_parent_scope(&std_path, ns, false, span, cl)
+                    {
+                        // check if we wrote `str::from_utf8` instead of `std::str::from_utf8`
+                        let item_span = path.iter().last().map(|segment| segment.ident.span)
+                            .unwrap_or(span);
+                        debug!("accessed item from `std` submodule as a bare type {:?}", std_path);
+                        let mut hm = self.session.confused_type_with_std_module.borrow_mut();
+                        hm.insert(item_span, span);
+                        // In some places (E0223) we only have access to the full path
+                        hm.insert(span, span);
+                    }
+                }
                 resolution
             }
             _ => report_errors(self, None)
@@ -3249,11 +3304,21 @@ impl<'a> Resolver<'a> {
         resolution
     }
 
-    fn type_ascription_suggestion(&self,
-                                  err: &mut DiagnosticBuilder<'_>,
-                                  base_span: Span) {
+    /// Only used in a specific case of type ascription suggestions
+    #[doc(hidden)]
+    fn get_colon_suggestion_span(&self, start: Span) -> Span {
+        let cm = self.session.source_map();
+        start.to(cm.next_point(start))
+    }
+
+    fn type_ascription_suggestion(
+        &self,
+        err: &mut DiagnosticBuilder<'_>,
+        base_span: Span,
+    ) {
         debug!("type_ascription_suggetion {:?}", base_span);
         let cm = self.session.source_map();
+        let base_snippet = cm.span_to_snippet(base_span);
         debug!("self.current_type_ascription {:?}", self.current_type_ascription);
         if let Some(sp) = self.current_type_ascription.last() {
             let mut sp = *sp;
@@ -3261,13 +3326,10 @@ impl<'a> Resolver<'a> {
                 // Try to find the `:`; bail on first non-':' / non-whitespace.
                 sp = cm.next_point(sp);
                 if let Ok(snippet) = cm.span_to_snippet(sp.to(cm.next_point(sp))) {
-                    debug!("snippet {:?}", snippet);
                     let line_sp = cm.lookup_char_pos(sp.hi()).line;
                     let line_base_sp = cm.lookup_char_pos(base_span.lo()).line;
-                    debug!("{:?} {:?}", line_sp, line_base_sp);
                     if snippet == ":" {
-                        err.span_label(base_span,
-                                       "expecting a type here because of type ascription");
+                        let mut show_label = true;
                         if line_sp != line_base_sp {
                             err.span_suggestion_short(
                                 sp,
@@ -3275,6 +3337,49 @@ impl<'a> Resolver<'a> {
                                 ";".to_string(),
                                 Applicability::MaybeIncorrect,
                             );
+                        } else {
+                            let colon_sp = self.get_colon_suggestion_span(sp);
+                            let after_colon_sp = self.get_colon_suggestion_span(
+                                colon_sp.shrink_to_hi(),
+                            );
+                            if !cm.span_to_snippet(after_colon_sp).map(|s| s == " ")
+                                .unwrap_or(false)
+                            {
+                                err.span_suggestion(
+                                    colon_sp,
+                                    "maybe you meant to write a path separator here",
+                                    "::".to_string(),
+                                    Applicability::MaybeIncorrect,
+                                );
+                                show_label = false;
+                            }
+                            if let Ok(base_snippet) = base_snippet {
+                                let mut sp = after_colon_sp;
+                                for _ in 0..100 {
+                                    // Try to find an assignment
+                                    sp = cm.next_point(sp);
+                                    let snippet = cm.span_to_snippet(sp.to(cm.next_point(sp)));
+                                    match snippet {
+                                        Ok(ref x) if x.as_str() == "=" => {
+                                            err.span_suggestion(
+                                                base_span,
+                                                "maybe you meant to write an assignment here",
+                                                format!("let {}", base_snippet),
+                                                Applicability::MaybeIncorrect,
+                                            );
+                                            show_label = false;
+                                            break;
+                                        }
+                                        Ok(ref x) if x.as_str() == "\n" => break,
+                                        Err(_) => break,
+                                        Ok(_) => {}
+                                    }
+                                }
+                            }
+                        }
+                        if show_label {
+                            err.span_label(base_span,
+                                           "expecting a type here because of type ascription");
                         }
                         break;
                     } else if !snippet.trim().is_empty() {
@@ -3301,16 +3406,17 @@ impl<'a> Resolver<'a> {
     }
 
     // Resolve in alternative namespaces if resolution in the primary namespace fails.
-    fn resolve_qpath_anywhere(&mut self,
-                              id: NodeId,
-                              qself: Option<&QSelf>,
-                              path: &[Segment],
-                              primary_ns: Namespace,
-                              span: Span,
-                              defer_to_typeck: bool,
-                              global_by_default: bool,
-                              crate_lint: CrateLint)
-                              -> Option<PathResolution> {
+    fn resolve_qpath_anywhere(
+        &mut self,
+        id: NodeId,
+        qself: Option<&QSelf>,
+        path: &[Segment],
+        primary_ns: Namespace,
+        span: Span,
+        defer_to_typeck: bool,
+        global_by_default: bool,
+        crate_lint: CrateLint,
+    ) -> Option<PathResolution> {
         let mut fin_res = None;
         // FIXME: can't resolve paths in macro namespace yet, macros are
         // processed by the little special hack below.
@@ -3340,15 +3446,16 @@ impl<'a> Resolver<'a> {
     }
 
     /// Handles paths that may refer to associated items.
-    fn resolve_qpath(&mut self,
-                     id: NodeId,
-                     qself: Option<&QSelf>,
-                     path: &[Segment],
-                     ns: Namespace,
-                     span: Span,
-                     global_by_default: bool,
-                     crate_lint: CrateLint)
-                     -> Option<PathResolution> {
+    fn resolve_qpath(
+        &mut self,
+        id: NodeId,
+        qself: Option<&QSelf>,
+        path: &[Segment],
+        ns: Namespace,
+        span: Span,
+        global_by_default: bool,
+        crate_lint: CrateLint,
+    ) -> Option<PathResolution> {
         debug!(
             "resolve_qpath(id={:?}, qself={:?}, path={:?}, \
              ns={:?}, span={:?}, global_by_default={:?})",
@@ -3429,7 +3536,7 @@ impl<'a> Resolver<'a> {
             // Such behavior is required for backward compatibility.
             // The same fallback is used when `a` resolves to nothing.
             PathResult::Module(ModuleOrUniformRoot::Module(_)) |
-            PathResult::Failed(..)
+            PathResult::Failed { .. }
                     if (ns == TypeNS || path.len() > 1) &&
                        self.primitive_type_table.primitive_types
                            .contains_key(&path[0].ident.name) => {
@@ -3438,11 +3545,11 @@ impl<'a> Resolver<'a> {
             }
             PathResult::Module(ModuleOrUniformRoot::Module(module)) =>
                 PathResolution::new(module.def().unwrap()),
-            PathResult::Failed(span, msg, false) => {
-                resolve_error(self, span, ResolutionError::FailedToResolve(&msg));
+            PathResult::Failed { is_error_from_last_segment: false, span, label, suggestion } => {
+                resolve_error(self, span, ResolutionError::FailedToResolve { label, suggestion });
                 err_path_resolution()
             }
-            PathResult::Module(..) | PathResult::Failed(..) => return None,
+            PathResult::Module(..) | PathResult::Failed { .. } => return None,
             PathResult::Indeterminate => bug!("indetermined path result in resolve_qpath"),
         };
 
@@ -3550,7 +3657,12 @@ impl<'a> Resolver<'a> {
                         }
                     }
                     let msg = "there are too many initial `super`s.".to_string();
-                    return PathResult::Failed(ident.span, msg, false);
+                    return PathResult::Failed {
+                        span: ident.span,
+                        label: msg,
+                        suggestion: None,
+                        is_error_from_last_segment: false,
+                    };
                 }
                 if i == 0 {
                     if name == keywords::SelfLower.name() {
@@ -3587,12 +3699,17 @@ impl<'a> Resolver<'a> {
                 } else {
                     format!("`{}`", name)
                 };
-                let msg = if i == 1 && path[0].ident.name == keywords::PathRoot.name() {
+                let label = if i == 1 && path[0].ident.name == keywords::PathRoot.name() {
                     format!("global paths cannot start with {}", name_str)
                 } else {
                     format!("{} in paths can only be used in start position", name_str)
                 };
-                return PathResult::Failed(ident.span, msg, false);
+                return PathResult::Failed {
+                    span: ident.span,
+                    label,
+                    suggestion: None,
+                    is_error_from_last_segment: false,
+                };
             }
 
             let binding = if let Some(module) = module {
@@ -3653,9 +3770,19 @@ impl<'a> Resolver<'a> {
                             def, path.len() - i - 1
                         ));
                     } else {
-                        return PathResult::Failed(ident.span,
-                                                  format!("not a module `{}`", ident),
-                                                  is_last);
+                        let label = format!(
+                            "`{}` is {} {}, not a module",
+                            ident,
+                            def.article(),
+                            def.kind_name(),
+                        );
+
+                        return PathResult::Failed {
+                            span: ident.span,
+                            label,
+                            suggestion: None,
+                            is_error_from_last_segment: is_last,
+                        };
                     }
                 }
                 Err(Undetermined) => return PathResult::Indeterminate,
@@ -3671,7 +3798,7 @@ impl<'a> Resolver<'a> {
                         Some(ModuleOrUniformRoot::Module(module)) => module.def(),
                         _ => None,
                     };
-                    let msg = if module_def == self.graph_root.def() {
+                    let (label, suggestion) = if module_def == self.graph_root.def() {
                         let is_mod = |def| match def { Def::Mod(..) => true, _ => false };
                         let mut candidates =
                             self.lookup_import_candidates(ident, TypeNS, is_mod);
@@ -3679,19 +3806,31 @@ impl<'a> Resolver<'a> {
                             (c.path.segments.len(), c.path.to_string())
                         });
                         if let Some(candidate) = candidates.get(0) {
-                            format!("did you mean `{}`?", candidate.path)
+                            (
+                                String::from("unresolved import"),
+                                Some((
+                                    vec![(ident.span, candidate.path.to_string())],
+                                    String::from("a similar path exists"),
+                                    Applicability::MaybeIncorrect,
+                                )),
+                            )
                         } else if !ident.is_reserved() {
-                            format!("maybe a missing `extern crate {};`?", ident)
+                            (format!("maybe a missing `extern crate {};`?", ident), None)
                         } else {
                             // the parser will already have complained about the keyword being used
                             return PathResult::NonModule(err_path_resolution());
                         }
                     } else if i == 0 {
-                        format!("use of undeclared type or module `{}`", ident)
+                        (format!("use of undeclared type or module `{}`", ident), None)
                     } else {
-                        format!("could not find `{}` in `{}`", ident, path[i - 1].ident)
+                        (format!("could not find `{}` in `{}`", ident, path[i - 1].ident), None)
                     };
-                    return PathResult::Failed(ident.span, msg, is_last);
+                    return PathResult::Failed {
+                        span: ident.span,
+                        label,
+                        suggestion,
+                        is_error_from_last_segment: is_last,
+                    };
                 }
             }
         }
@@ -3822,7 +3961,7 @@ impl<'a> Resolver<'a> {
                                 seen.insert(node_id, depth);
                             }
                         }
-                        ItemRibKind | TraitOrImplItemRibKind => {
+                        ItemRibKind | FnItemRibKind | TraitOrImplItemRibKind => {
                             // This was an attempt to access an upvar inside a
                             // named function item. This is not allowed, so we
                             // report an error.
@@ -3856,7 +3995,7 @@ impl<'a> Resolver<'a> {
                         ConstantItemRibKind => {
                             // Nothing to do. Continue.
                         }
-                        ItemRibKind => {
+                        ItemRibKind | FnItemRibKind => {
                             // This was an attempt to use a type parameter outside its scope.
                             if record_used {
                                 resolve_error(
@@ -3871,12 +4010,15 @@ impl<'a> Resolver<'a> {
                 }
             }
             Def::ConstParam(..) => {
-                // A const param is always declared in a signature, which is always followed by
-                // some kind of function rib kind (specifically, ItemRibKind in the case of a
-                // normal function), so we can skip the first rib as it will be guaranteed to
-                // (spuriously) conflict with the const param.
-                for rib in &ribs[1..] {
-                    if let ItemRibKind = rib.kind {
+                let mut ribs = ribs.iter().peekable();
+                if let Some(Rib { kind: FnItemRibKind, .. }) = ribs.peek() {
+                    // When declaring const parameters inside function signatures, the first rib
+                    // is always a `FnItemRibKind`. In this case, we can skip it, to avoid it
+                    // (spuriously) conflicting with the const param.
+                    ribs.next();
+                }
+                for rib in ribs {
+                    if let ItemRibKind | FnItemRibKind = rib.kind {
                         // This was an attempt to use a const parameter outside its scope.
                         if record_used {
                             resolve_error(
@@ -4005,13 +4147,27 @@ impl<'a> Resolver<'a> {
                     } else {
                         // Items from the prelude
                         if !module.no_implicit_prelude {
-                            names.extend(self.extern_prelude.iter().map(|(ident, _)| {
-                                TypoSuggestion {
-                                    candidate: ident.name,
-                                    article: "a",
-                                    kind: "crate",
-                                }
+                            names.extend(self.extern_prelude.clone().iter().flat_map(|(ident, _)| {
+                                self.crate_loader
+                                    .maybe_process_path_extern(ident.name, ident.span)
+                                    .and_then(|crate_id| {
+                                        let crate_mod = Def::Mod(DefId {
+                                            krate: crate_id,
+                                            index: CRATE_DEF_INDEX,
+                                        });
+
+                                        if filter_fn(crate_mod) {
+                                            Some(TypoSuggestion {
+                                                candidate: ident.name,
+                                                article: "a",
+                                                kind: "crate",
+                                            })
+                                        } else {
+                                            None
+                                        }
+                                    })
                             }));
+
                             if let Some(prelude) = self.prelude {
                                 add_module_candidates(prelude, &mut names);
                             }
@@ -4328,26 +4484,47 @@ impl<'a> Resolver<'a> {
             let mut collected_traits = Vec::new();
             module.for_each_child(|name, ns, binding| {
                 if ns != TypeNS { return }
-                if let Def::Trait(_) = binding.def() {
-                    collected_traits.push((name, binding));
+                match binding.def() {
+                    Def::Trait(_) |
+                    Def::TraitAlias(_) => collected_traits.push((name, binding)),
+                    _ => (),
                 }
             });
             *traits = Some(collected_traits.into_boxed_slice());
         }
 
         for &(trait_name, binding) in traits.as_ref().unwrap().iter() {
-            let module = binding.module().unwrap();
-            let mut ident = ident;
-            if ident.span.glob_adjust(module.expansion, binding.span.ctxt().modern()).is_none() {
-                continue
-            }
-            if self.resolve_ident_in_module_unadjusted(
-                ModuleOrUniformRoot::Module(module),
-                ident,
-                ns,
-                false,
-                module.span,
-            ).is_ok() {
+            // Traits have pseudo-modules that can be used to search for the given ident.
+            if let Some(module) = binding.module() {
+                let mut ident = ident;
+                if ident.span.glob_adjust(
+                    module.expansion,
+                    binding.span.ctxt().modern(),
+                ).is_none() {
+                    continue
+                }
+                if self.resolve_ident_in_module_unadjusted(
+                    ModuleOrUniformRoot::Module(module),
+                    ident,
+                    ns,
+                    false,
+                    module.span,
+                ).is_ok() {
+                    let import_id = match binding.kind {
+                        NameBindingKind::Import { directive, .. } => {
+                            self.maybe_unused_trait_imports.insert(directive.id);
+                            self.add_to_glob_map(&directive, trait_name);
+                            Some(directive.id)
+                        }
+                        _ => None,
+                    };
+                    let trait_def_id = module.def_id().unwrap();
+                    found_traits.push(TraitCandidate { def_id: trait_def_id, import_id });
+                }
+            } else if let Def::TraitAlias(_) = binding.def() {
+                // For now, just treat all trait aliases as possible candidates, since we don't
+                // know if the ident is somewhere in the transitive bounds.
+
                 let import_id = match binding.kind {
                     NameBindingKind::Import { directive, .. } => {
                         self.maybe_unused_trait_imports.insert(directive.id);
@@ -4356,8 +4533,10 @@ impl<'a> Resolver<'a> {
                     }
                     _ => None,
                 };
-                let trait_def_id = module.def_id().unwrap();
-                found_traits.push(TraitCandidate { def_id: trait_def_id, import_id: import_id });
+                let trait_def_id = binding.def().def_id();
+                found_traits.push(TraitCandidate { def_id: trait_def_id, import_id });
+            } else {
+                bug!("candidate is not trait or trait alias?")
             }
         }
     }
@@ -4417,8 +4596,7 @@ impl<'a> Resolver<'a> {
                         // outside crate private modules => no need to check this)
                         if !in_module_is_extern || name_binding.vis == ty::Visibility::Public {
                             let did = match def {
-                                Def::StructCtor(did, _) | Def::VariantCtor(did, _) =>
-                                    self.parent(did),
+                                Def::Ctor(did, ..) => self.parent(did),
                                 _ => def.opt_def_id(),
                             };
                             candidates.push(ImportSuggestion { did, path });
@@ -4891,7 +5069,7 @@ impl<'a> Resolver<'a> {
             Some((directive, _, true)) if should_remove_import && !directive.is_glob() => {
                 // Simple case - remove the entire import. Due to the above match arm, this can
                 // only be a single use so just remove it entirely.
-                err.span_suggestion(
+                err.tool_only_span_suggestion(
                     directive.use_span_with_attributes,
                     "remove unnecessary import",
                     String::new(),
@@ -5001,7 +5179,6 @@ impl<'a> Resolver<'a> {
     ) {
         assert!(directive.is_nested());
         let message = "remove unnecessary import";
-        let source_map = self.session.source_map();
 
         // Two examples will be used to illustrate the span manipulations we're doing:
         //
@@ -5010,73 +5187,24 @@ impl<'a> Resolver<'a> {
         // - Given `use issue_52891::{d, e, a};` where `a` is a duplicate then `binding_span` is
         //   `a` and `directive.use_span` is `issue_52891::{d, e, a};`.
 
-        // Find the span of everything after the binding.
-        //   ie. `a, e};` or `a};`
-        let binding_until_end = binding_span.with_hi(directive.use_span.hi());
-
-        // Find everything after the binding but not including the binding.
-        //   ie. `, e};` or `};`
-        let after_binding_until_end = binding_until_end.with_lo(binding_span.hi());
-
-        // Keep characters in the span until we encounter something that isn't a comma or
-        // whitespace.
-        //   ie. `, ` or ``.
-        //
-        // Also note whether a closing brace character was encountered. If there
-        // was, then later go backwards to remove any trailing commas that are left.
-        let mut found_closing_brace = false;
-        let after_binding_until_next_binding = source_map.span_take_while(
-            after_binding_until_end,
-            |&ch| {
-                if ch == '}' { found_closing_brace = true; }
-                ch == ' ' || ch == ','
-            }
+        let (found_closing_brace, span) = find_span_of_binding_until_next_binding(
+            self.session, binding_span, directive.use_span,
         );
-
-        // Combine the two spans.
-        //   ie. `a, ` or `a`.
-        //
-        // Removing these would leave `issue_52891::{d, e};` or `issue_52891::{d, e, };`
-        let span = binding_span.with_hi(after_binding_until_next_binding.hi());
 
         // If there was a closing brace then identify the span to remove any trailing commas from
         // previous imports.
         if found_closing_brace {
-            if let Ok(prev_source) = source_map.span_to_prev_source(span) {
-                // `prev_source` will contain all of the source that came before the span.
-                // Then split based on a command and take the first (ie. closest to our span)
-                // snippet. In the example, this is a space.
-                let prev_comma = prev_source.rsplit(',').collect::<Vec<_>>();
-                let prev_starting_brace = prev_source.rsplit('{').collect::<Vec<_>>();
-                if prev_comma.len() > 1 && prev_starting_brace.len() > 1 {
-                    let prev_comma = prev_comma.first().unwrap();
-                    let prev_starting_brace = prev_starting_brace.first().unwrap();
-
-                    // If the amount of source code before the comma is greater than
-                    // the amount of source code before the starting brace then we've only
-                    // got one item in the nested item (eg. `issue_52891::{self}`).
-                    if prev_comma.len() > prev_starting_brace.len() {
-                        // So just remove the entire line...
-                        err.span_suggestion(
-                            directive.use_span_with_attributes,
-                            message,
-                            String::new(),
-                            Applicability::MaybeIncorrect,
-                        );
-                        return;
-                    }
-
-                    let span = span.with_lo(BytePos(
-                        // Take away the number of bytes for the characters we've found and an
-                        // extra for the comma.
-                        span.lo().0 - (prev_comma.as_bytes().len() as u32) - 1
-                    ));
-                    err.span_suggestion(
-                        span, message, String::new(), Applicability::MaybeIncorrect,
-                    );
-                    return;
-                }
+            if let Some(span) = extend_span_to_previous_binding(self.session, span) {
+                err.tool_only_span_suggestion(span, message, String::new(),
+                                              Applicability::MaybeIncorrect);
+            } else {
+                // Remove the entire line if we cannot extend the span back, this indicates a
+                // `issue_52891::{self}` case.
+                err.span_suggestion(directive.use_span_with_attributes, message, String::new(),
+                                    Applicability::MaybeIncorrect);
             }
+
+            return;
         }
 
         err.span_suggestion(span, message, String::new(), Applicability::MachineApplicable);

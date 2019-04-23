@@ -63,6 +63,8 @@
 //!
 //! [dereferencing]: ../../std/ops/trait.Deref.html
 //! [`Box`]: struct.Box.html
+//! [`Global`]: ../alloc/struct.Global.html
+//! [`Layout`]: ../alloc/struct.Layout.html
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
@@ -81,7 +83,7 @@ use core::ops::{
     CoerceUnsized, DispatchFromDyn, Deref, DerefMut, Receiver, Generator, GeneratorState
 };
 use core::ptr::{self, NonNull, Unique};
-use core::task::{Waker, Poll};
+use core::task::{Context, Poll};
 
 use crate::vec::Vec;
 use crate::raw_vec::RawVec;
@@ -489,7 +491,7 @@ impl<T: ?Sized> From<Box<T>> for Pin<Box<T>> {
 }
 
 #[stable(feature = "box_from_slice", since = "1.17.0")]
-impl<'a, T: Copy> From<&'a [T]> for Box<[T]> {
+impl<T: Copy> From<&[T]> for Box<[T]> {
     /// Converts a `&[T]` into a `Box<[T]>`
     ///
     /// This conversion allocates on the heap
@@ -503,7 +505,7 @@ impl<'a, T: Copy> From<&'a [T]> for Box<[T]> {
     ///
     /// println!("{:?}", boxed_slice);
     /// ```
-    fn from(slice: &'a [T]) -> Box<[T]> {
+    fn from(slice: &[T]) -> Box<[T]> {
         let mut boxed = unsafe { RawVec::with_capacity(slice.len()).into_box() };
         boxed.copy_from_slice(slice);
         boxed
@@ -511,7 +513,7 @@ impl<'a, T: Copy> From<&'a [T]> for Box<[T]> {
 }
 
 #[stable(feature = "box_from_slice", since = "1.17.0")]
-impl<'a> From<&'a str> for Box<str> {
+impl From<&str> for Box<str> {
     /// Converts a `&str` into a `Box<str>`
     ///
     /// This conversion allocates on the heap
@@ -523,7 +525,7 @@ impl<'a> From<&'a str> for Box<str> {
     /// println!("{}", boxed);
     /// ```
     #[inline]
-    fn from(s: &'a str) -> Box<str> {
+    fn from(s: &str) -> Box<str> {
         unsafe { from_boxed_utf8_unchecked(Box::from(s.as_bytes())) }
     }
 }
@@ -677,6 +679,9 @@ impl<I: DoubleEndedIterator + ?Sized> DoubleEndedIterator for Box<I> {
     fn next_back(&mut self) -> Option<I::Item> {
         (**self).next_back()
     }
+    fn nth_back(&mut self, n: usize) -> Option<I::Item> {
+        (**self).nth_back(n)
+    }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<I: ExactSizeIterator + ?Sized> ExactSizeIterator for Box<I> {
@@ -691,6 +696,28 @@ impl<I: ExactSizeIterator + ?Sized> ExactSizeIterator for Box<I> {
 #[stable(feature = "fused", since = "1.26.0")]
 impl<I: FusedIterator + ?Sized> FusedIterator for Box<I> {}
 
+#[stable(feature = "boxed_closure_impls", since = "1.35.0")]
+impl<A, F: FnOnce<A> + ?Sized> FnOnce<A> for Box<F> {
+    type Output = <F as FnOnce<A>>::Output;
+
+    extern "rust-call" fn call_once(self, args: A) -> Self::Output {
+        <F as FnOnce<A>>::call_once(*self, args)
+    }
+}
+
+#[stable(feature = "boxed_closure_impls", since = "1.35.0")]
+impl<A, F: FnMut<A> + ?Sized> FnMut<A> for Box<F> {
+    extern "rust-call" fn call_mut(&mut self, args: A) -> Self::Output {
+        <F as FnMut<A>>::call_mut(self, args)
+    }
+}
+
+#[stable(feature = "boxed_closure_impls", since = "1.35.0")]
+impl<A, F: Fn<A> + ?Sized> Fn<A> for Box<F> {
+    extern "rust-call" fn call(&self, args: A) -> Self::Output {
+        <F as Fn<A>>::call(self, args)
+    }
+}
 
 /// `FnBox` is a version of the `FnOnce` intended for use with boxed
 /// closure objects. The idea is that where one would normally store a
@@ -732,9 +759,8 @@ impl<I: FusedIterator + ?Sized> FusedIterator for Box<I> {}
 #[rustc_paren_sugar]
 #[unstable(feature = "fnbox",
            reason = "will be deprecated if and when `Box<FnOnce>` becomes usable", issue = "28796")]
-pub trait FnBox<A> {
-    type Output;
-
+pub trait FnBox<A>: FnOnce<A> {
+    /// Performs the call operation.
     fn call_box(self: Box<Self>, args: A) -> Self::Output;
 }
 
@@ -743,30 +769,8 @@ pub trait FnBox<A> {
 impl<A, F> FnBox<A> for F
     where F: FnOnce<A>
 {
-    type Output = F::Output;
-
     fn call_box(self: Box<F>, args: A) -> F::Output {
         self.call_once(args)
-    }
-}
-
-#[unstable(feature = "fnbox",
-           reason = "will be deprecated if and when `Box<FnOnce>` becomes usable", issue = "28796")]
-impl<A, R> FnOnce<A> for Box<dyn FnBox<A, Output = R> + '_> {
-    type Output = R;
-
-    extern "rust-call" fn call_once(self, args: A) -> R {
-        self.call_box(args)
-    }
-}
-
-#[unstable(feature = "fnbox",
-           reason = "will be deprecated if and when `Box<FnOnce>` becomes usable", issue = "28796")]
-impl<A, R> FnOnce<A> for Box<dyn FnBox<A, Output = R> + Send + '_> {
-    type Output = R;
-
-    extern "rust-call" fn call_once(self, args: A) -> R {
-        self.call_box(args)
     }
 }
 
@@ -911,7 +915,7 @@ impl<G: ?Sized + Generator> Generator for Pin<Box<G>> {
 impl<F: ?Sized + Future + Unpin> Future for Box<F> {
     type Output = F::Output;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &Waker) -> Poll<Self::Output> {
-        F::poll(Pin::new(&mut *self), waker)
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        F::poll(Pin::new(&mut *self), cx)
     }
 }

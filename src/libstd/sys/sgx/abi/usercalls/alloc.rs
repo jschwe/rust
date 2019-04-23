@@ -188,8 +188,17 @@ impl<T: ?Sized> User<T> where T: UserSafe {
     // from outside as obtained by `super::alloc`.
     fn new_uninit_bytes(size: usize) -> Self {
         unsafe {
-            let ptr = super::alloc(size, T::align_of()).expect("User memory allocation failed");
-            User(NonNull::new_userref(T::from_raw_sized(ptr as _, size)))
+            // Mustn't call alloc with size 0.
+            let ptr = if size > 0 {
+                rtunwrap!(Ok, super::alloc(size, T::align_of())) as _
+            } else {
+                T::align_of() as _ // dangling pointer ok for size 0
+            };
+            if let Ok(v) = crate::panic::catch_unwind(|| T::from_raw_sized(ptr, size)) {
+                User(NonNull::new_userref(v))
+            } else {
+                rtabort!("Got invalid pointer from alloc() usercall")
+            }
         }
     }
 
@@ -424,7 +433,7 @@ impl<T> UserRef<[T]> where [T]: UserSafe {
     }
 
     /// Returns an iterator over the slice.
-    pub fn iter(&self) -> Iter<T>
+    pub fn iter(&self) -> Iter<'_, T>
         where T: UserSafe // FIXME: should be implied by [T]: UserSafe?
     {
         unsafe {
@@ -433,7 +442,7 @@ impl<T> UserRef<[T]> where [T]: UserSafe {
     }
 
     /// Returns an iterator that allows modifying each value.
-    pub fn iter_mut(&mut self) -> IterMut<T>
+    pub fn iter_mut(&mut self) -> IterMut<'_, T>
         where T: UserSafe // FIXME: should be implied by [T]: UserSafe?
     {
         unsafe {

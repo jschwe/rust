@@ -7,6 +7,7 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![deny(rust_2018_idioms)]
+#![deny(internal)]
 
 #![feature(const_fn)]
 #![feature(crate_visibility_modifier)]
@@ -15,9 +16,9 @@
 #![feature(non_exhaustive)]
 #![feature(optin_builtin_traits)]
 #![feature(rustc_attrs)]
+#![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(step_trait)]
-#![cfg_attr(not(stage0), feature(stdsimd))]
 
 use serialize::{Encodable, Decodable, Encoder, Decoder};
 
@@ -32,6 +33,7 @@ mod span_encoding;
 pub use span_encoding::{Span, DUMMY_SP};
 
 pub mod symbol;
+pub use symbol::symbols;
 
 mod analyze_source_file;
 
@@ -1295,7 +1297,7 @@ impl Sub for CharPos {
 }
 
 // _____________________________________________________________________________
-// Loc, LocWithOpt, SourceFileAndLine, SourceFileAndBytePos
+// Loc, SourceFileAndLine, SourceFileAndBytePos
 //
 
 /// A source code location used for error reporting.
@@ -1309,17 +1311,6 @@ pub struct Loc {
     pub col: CharPos,
     /// The (0-based) column offset when displayed.
     pub col_display: usize,
-}
-
-/// A source code location used as the result of `lookup_char_pos_adj`.
-// Actually, *none* of the clients use the filename *or* file field;
-// perhaps they should just be removed.
-#[derive(Debug)]
-pub struct LocWithOpt {
-    pub filename: FileName,
-    pub line: usize,
-    pub col: CharPos,
-    pub file: Option<Lrc<SourceFile>>,
 }
 
 // Used to be structural records.

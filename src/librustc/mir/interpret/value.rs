@@ -1,11 +1,13 @@
 use std::fmt;
+use rustc_macros::HashStable;
 
-use crate::ty::{Ty, layout::{HasDataLayout, Size}};
+use crate::ty::{Ty, InferConst, ParamConst, layout::{HasDataLayout, Size}, subst::SubstsRef};
+use crate::hir::def_id::DefId;
 
 use super::{EvalResult, Pointer, PointerArithmetic, Allocation, AllocId, sign_extend, truncate};
 
 /// Represents the result of a raw const operation, pre-validation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, RustcEncodable, RustcDecodable, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, RustcEncodable, RustcDecodable, Hash, HashStable)]
 pub struct RawConst<'tcx> {
     // the value lives here, at offset 0, and that allocation definitely is a `AllocKind::Memory`
     // (so you can use `AllocMap::unwrap_memory`).
@@ -15,8 +17,15 @@ pub struct RawConst<'tcx> {
 
 /// Represents a constant value in Rust. `Scalar` and `ScalarPair` are optimizations that
 /// match the `LocalState` optimizations for easy conversions between `Value` and `ConstValue`.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord,
+         RustcEncodable, RustcDecodable, Hash, HashStable)]
 pub enum ConstValue<'tcx> {
+    /// A const generic parameter.
+    Param(ParamConst),
+
+    /// Infer the value of the const.
+    Infer(InferConst<'tcx>),
+
     /// Used only for types with `layout::abi::Scalar` ABI and ZSTs.
     ///
     /// Not using the enum `Value` to encode that this must not be `Undef`.
@@ -34,6 +43,10 @@ pub enum ConstValue<'tcx> {
     /// An allocation together with a pointer into the allocation.
     /// Invariant: the pointer's `AllocId` resolves to the allocation.
     ByRef(Pointer, &'tcx Allocation),
+
+    /// Used in the HIR by using `Unevaluated` everywhere and later normalizing to one of the other
+    /// variants when the code is monomorphic enough for that.
+    Unevaluated(DefId, SubstsRef<'tcx>),
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -43,7 +56,10 @@ impl<'tcx> ConstValue<'tcx> {
     #[inline]
     pub fn try_to_scalar(&self) -> Option<Scalar> {
         match *self {
+            ConstValue::Param(_) |
+            ConstValue::Infer(_) |
             ConstValue::ByRef(..) |
+            ConstValue::Unevaluated(..) |
             ConstValue::Slice(..) => None,
             ConstValue::Scalar(val) => Some(val),
         }
@@ -72,7 +88,8 @@ impl<'tcx> ConstValue<'tcx> {
 /// `memory::Allocation`. It is in many ways like a small chunk of a `Allocation`, up to 8 bytes in
 /// size. Like a range of bytes in an `Allocation`, a `Scalar` can either represent the raw bytes
 /// of a simple value or a pointer into another `Allocation`
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, RustcEncodable, RustcDecodable, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd,
+         RustcEncodable, RustcDecodable, Hash, HashStable)]
 pub enum Scalar<Tag=(), Id=AllocId> {
     /// The raw bytes of a simple value.
     Bits {
@@ -102,13 +119,18 @@ impl<Tag> fmt::Display for Scalar<Tag> {
 
 impl<'tcx> Scalar<()> {
     #[inline]
+    pub fn with_tag<Tag>(self, new_tag: Tag) -> Scalar<Tag> {
+        match self {
+            Scalar::Ptr(ptr) => Scalar::Ptr(ptr.with_tag(new_tag)),
+            Scalar::Bits { bits, size } => Scalar::Bits { bits, size },
+        }
+    }
+
+    #[inline(always)]
     pub fn with_default_tag<Tag>(self) -> Scalar<Tag>
         where Tag: Default
     {
-        match self {
-            Scalar::Ptr(ptr) => Scalar::Ptr(ptr.with_default_tag()),
-            Scalar::Bits { bits, size } => Scalar::Bits { bits, size },
-        }
+        self.with_tag(Tag::default())
     }
 }
 
@@ -117,14 +139,6 @@ impl<'tcx, Tag> Scalar<Tag> {
     pub fn erase_tag(self) -> Scalar {
         match self {
             Scalar::Ptr(ptr) => Scalar::Ptr(ptr.erase_tag()),
-            Scalar::Bits { bits, size } => Scalar::Bits { bits, size },
-        }
-    }
-
-    #[inline]
-    pub fn with_tag(self, new_tag: Tag) -> Self {
-        match self {
-            Scalar::Ptr(ptr) => Scalar::Ptr(Pointer { tag: new_tag, ..ptr }),
             Scalar::Bits { bits, size } => Scalar::Bits { bits, size },
         }
     }
@@ -417,13 +431,18 @@ impl<Tag> fmt::Display for ScalarMaybeUndef<Tag> {
 
 impl<'tcx> ScalarMaybeUndef<()> {
     #[inline]
+    pub fn with_tag<Tag>(self, new_tag: Tag) -> ScalarMaybeUndef<Tag> {
+        match self {
+            ScalarMaybeUndef::Scalar(s) => ScalarMaybeUndef::Scalar(s.with_tag(new_tag)),
+            ScalarMaybeUndef::Undef => ScalarMaybeUndef::Undef,
+        }
+    }
+
+    #[inline(always)]
     pub fn with_default_tag<Tag>(self) -> ScalarMaybeUndef<Tag>
         where Tag: Default
     {
-        match self {
-            ScalarMaybeUndef::Scalar(s) => ScalarMaybeUndef::Scalar(s.with_default_tag()),
-            ScalarMaybeUndef::Undef => ScalarMaybeUndef::Undef,
-        }
+        self.with_tag(Tag::default())
     }
 }
 

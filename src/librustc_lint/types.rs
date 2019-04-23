@@ -49,20 +49,11 @@ pub struct TypeLimits {
     negated_expr_id: hir::HirId,
 }
 
+impl_lint_pass!(TypeLimits => [UNUSED_COMPARISONS, OVERFLOWING_LITERALS]);
+
 impl TypeLimits {
     pub fn new() -> TypeLimits {
         TypeLimits { negated_expr_id: hir::DUMMY_HIR_ID }
-    }
-}
-
-impl LintPass for TypeLimits {
-    fn name(&self) -> &'static str {
-        "TypeLimits"
-    }
-
-    fn get_lints(&self) -> LintArray {
-        lint_array!(UNUSED_COMPARISONS,
-                    OVERFLOWING_LITERALS)
     }
 }
 
@@ -104,7 +95,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
                                         report_bin_hex_error(
                                             cx,
                                             e,
-                                            ty::Int(t),
+                                            attr::IntType::SignedInt(t),
                                             repr_str,
                                             v,
                                             negative,
@@ -159,7 +150,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
                                 report_bin_hex_error(
                                     cx,
                                     e,
-                                    ty::Uint(t),
+                                    attr::IntType::UnsignedInt(t),
                                     repr_str,
                                     lit_val,
                                     false,
@@ -321,7 +312,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
         //
         // No suggestion for: `isize`, `usize`.
         fn get_type_suggestion<'a>(
-            t: &ty::TyKind<'_>,
+            t: Ty<'_>,
             val: u128,
             negative: bool,
         ) -> Option<String> {
@@ -347,14 +338,14 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
                     }
                 }
             }
-            match t {
-                &ty::Int(i) => find_fit!(i, val, negative,
+            match t.sty {
+                ty::Int(i) => find_fit!(i, val, negative,
                               I8 => [U8] => [I16, I32, I64, I128],
                               I16 => [U16] => [I32, I64, I128],
                               I32 => [U32] => [I64, I128],
                               I64 => [U64] => [I128],
                               I128 => [U128] => []),
-                &ty::Uint(u) => find_fit!(u, val, negative,
+                ty::Uint(u) => find_fit!(u, val, negative,
                               U8 => [U8, U16, U32, U64, U128] => [],
                               U16 => [U16, U32, U64, U128] => [],
                               U32 => [U32, U64, U128] => [],
@@ -367,25 +358,21 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
         fn report_bin_hex_error(
             cx: &LateContext<'_, '_>,
             expr: &hir::Expr,
-            ty: ty::TyKind<'_>,
+            ty: attr::IntType,
             repr_str: String,
             val: u128,
             negative: bool,
         ) {
+            let size = layout::Integer::from_attr(&cx.tcx, ty).size();
             let (t, actually) = match ty {
-                ty::Int(t) => {
-                    let ity = attr::IntType::SignedInt(t);
-                    let size = layout::Integer::from_attr(&cx.tcx, ity).size();
+                attr::IntType::SignedInt(t) => {
                     let actually = sign_extend(val, size) as i128;
                     (format!("{:?}", t), actually.to_string())
                 }
-                ty::Uint(t) => {
-                    let ity = attr::IntType::UnsignedInt(t);
-                    let size = layout::Integer::from_attr(&cx.tcx, ity).size();
+                attr::IntType::UnsignedInt(t) => {
                     let actually = truncate(val, size);
                     (format!("{:?}", t), actually.to_string())
                 }
-                _ => bug!(),
             };
             let mut err = cx.struct_span_lint(
                 OVERFLOWING_LITERALS,
@@ -398,7 +385,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
                 repr_str, val, t, actually, t
             ));
             if let Some(sugg_ty) =
-                get_type_suggestion(&cx.tables.node_type(expr.hir_id).sty, val, negative)
+                get_type_suggestion(&cx.tables.node_type(expr.hir_id), val, negative)
             {
                 if let Some(pos) = repr_str.chars().position(|c| c == 'i' || c == 'u') {
                     let (sans_suffix, _) = repr_str.split_at(pos);
@@ -423,6 +410,8 @@ declare_lint! {
     Warn,
     "proper use of libc types in foreign modules"
 }
+
+declare_lint_pass!(ImproperCTypes => [IMPROPER_CTYPES]);
 
 struct ImproperCTypesVisitor<'a, 'tcx: 'a> {
     cx: &'a LateContext<'a, 'tcx>,
@@ -793,19 +782,6 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
     }
 }
 
-#[derive(Copy, Clone)]
-pub struct ImproperCTypes;
-
-impl LintPass for ImproperCTypes {
-    fn name(&self) -> &'static str {
-        "ImproperCTypes"
-    }
-
-    fn get_lints(&self) -> LintArray {
-        lint_array!(IMPROPER_CTYPES)
-    }
-}
-
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ImproperCTypes {
     fn check_foreign_item(&mut self, cx: &LateContext<'_, '_>, it: &hir::ForeignItem) {
         let mut vis = ImproperCTypesVisitor { cx };
@@ -824,17 +800,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ImproperCTypes {
     }
 }
 
-pub struct VariantSizeDifferences;
-
-impl LintPass for VariantSizeDifferences {
-    fn name(&self) -> &'static str {
-        "VariantSizeDifferences"
-    }
-
-    fn get_lints(&self) -> LintArray {
-        lint_array!(VARIANT_SIZE_DIFFERENCES)
-    }
-}
+declare_lint_pass!(VariantSizeDifferences => [VARIANT_SIZE_DIFFERENCES]);
 
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for VariantSizeDifferences {
     fn check_item(&mut self, cx: &LateContext<'_, '_>, it: &hir::Item) {
@@ -842,51 +808,57 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for VariantSizeDifferences {
             let item_def_id = cx.tcx.hir().local_def_id_from_hir_id(it.hir_id);
             let t = cx.tcx.type_of(item_def_id);
             let ty = cx.tcx.erase_regions(&t);
-            match cx.layout_of(ty) {
-                Ok(layout) => {
-                    let variants = &layout.variants;
-                    if let layout::Variants::Tagged { ref variants, ref tag, .. } = variants {
-                        let discr_size = tag.value.size(&cx.tcx).bytes();
-
-                        debug!("enum `{}` is {} bytes large with layout:\n{:#?}",
-                               t, layout.size.bytes(), layout);
-
-                        let (largest, slargest, largest_index) = enum_definition.variants
-                            .iter()
-                            .zip(variants)
-                            .map(|(variant, variant_layout)| {
-                                // Subtract the size of the enum discriminant.
-                                let bytes = variant_layout.size.bytes().saturating_sub(discr_size);
-
-                                debug!("- variant `{}` is {} bytes large",
-                                       variant.node.ident,
-                                       bytes);
-                                bytes
-                            })
-                            .enumerate()
-                            .fold((0, 0, 0), |(l, s, li), (idx, size)| if size > l {
-                                (size, l, idx)
-                            } else if size > s {
-                                (l, size, li)
-                            } else {
-                                (l, s, li)
-                            });
-
-                        // We only warn if the largest variant is at least thrice as large as
-                        // the second-largest.
-                        if largest > slargest * 3 && slargest > 0 {
-                            cx.span_lint(VARIANT_SIZE_DIFFERENCES,
-                                            enum_definition.variants[largest_index].span,
-                                            &format!("enum variant is more than three times \
-                                                      larger ({} bytes) than the next largest",
-                                                     largest));
-                        }
-                    }
-                }
+            let layout = match cx.layout_of(ty) {
+                Ok(layout) => layout,
                 Err(ty::layout::LayoutError::Unknown(_)) => return,
                 Err(err @ ty::layout::LayoutError::SizeOverflow(_)) => {
                     bug!("failed to get layout for `{}`: {}", t, err);
                 }
+            };
+            let (variants, tag) = match layout.variants {
+                layout::Variants::Multiple {
+                    discr_kind: layout::DiscriminantKind::Tag,
+                    ref discr,
+                    ref variants,
+                    ..
+                } => (variants, discr),
+                _ => return,
+            };
+
+            let discr_size = tag.value.size(&cx.tcx).bytes();
+
+            debug!("enum `{}` is {} bytes large with layout:\n{:#?}",
+                   t, layout.size.bytes(), layout);
+
+            let (largest, slargest, largest_index) = enum_definition.variants
+                .iter()
+                .zip(variants)
+                .map(|(variant, variant_layout)| {
+                    // Subtract the size of the enum discriminant.
+                    let bytes = variant_layout.size.bytes().saturating_sub(discr_size);
+
+                    debug!("- variant `{}` is {} bytes large",
+                           variant.node.ident,
+                           bytes);
+                    bytes
+                })
+                .enumerate()
+                .fold((0, 0, 0), |(l, s, li), (idx, size)| if size > l {
+                    (size, l, idx)
+                } else if size > s {
+                    (l, size, li)
+                } else {
+                    (l, s, li)
+                });
+
+            // We only warn if the largest variant is at least thrice as large as
+            // the second-largest.
+            if largest > slargest * 3 && slargest > 0 {
+                cx.span_lint(VARIANT_SIZE_DIFFERENCES,
+                                enum_definition.variants[largest_index].span,
+                                &format!("enum variant is more than three times \
+                                          larger ({} bytes) than the next largest",
+                                         largest));
             }
         }
     }

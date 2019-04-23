@@ -122,7 +122,7 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
     where D: DropElaborator<'b, 'tcx>
 {
     fn place_ty(&self, place: &Place<'tcx>) -> Ty<'tcx> {
-        place.ty(self.elaborator.mir(), self.tcx()).to_ty(self.tcx())
+        place.ty(self.elaborator.mir(), self.tcx()).ty
     }
 
     fn tcx(&self) -> TyCtxt<'b, 'tcx, 'tcx> {
@@ -412,8 +412,8 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
                 self.path, variant_index);
             if let Some(variant_path) = subpath {
                 let base_place = self.place.clone().elem(
-                    ProjectionElem::Downcast(adt, variant_index)
-                        );
+                    ProjectionElem::Downcast(Some(adt.variants[variant_index].ident.name),
+                                             variant_index));
                 let fields = self.move_paths_for_fields(
                     &base_place,
                     variant_path,
@@ -966,9 +966,9 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
             span: self.source_info.span,
             ty: self.tcx().types.usize,
             user_ty: None,
-            literal: self.tcx().mk_lazy_const(ty::LazyConst::Evaluated(
+            literal: self.tcx().mk_const(
                 ty::Const::from_usize(self.tcx(), val.into())
-            )),
+            ),
         })
     }
 

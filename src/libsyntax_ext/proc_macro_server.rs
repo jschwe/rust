@@ -12,7 +12,6 @@ use syntax::ast;
 use syntax::ext::base::ExtCtxt;
 use syntax::parse::lexer::comments;
 use syntax::parse::{self, token, ParseSess};
-use syntax::parse::parser::emit_unclosed_delims;
 use syntax::tokenstream::{self, DelimSpan, IsJoint::*, TokenStream, TreeAndJoint};
 use syntax_pos::hygiene::{SyntaxContext, Transparency};
 use syntax_pos::symbol::{keywords, Symbol};
@@ -337,16 +336,12 @@ impl Ident {
         }
     }
     fn new(sym: Symbol, is_raw: bool, span: Span) -> Ident {
-        let string = sym.as_str().get();
-        if !Self::is_valid(string) {
+        let string = sym.as_str();
+        if !Self::is_valid(&string) {
             panic!("`{:?}` is not a valid identifier", string)
         }
-        if is_raw {
-            let normalized_sym = Symbol::intern(string);
-            if normalized_sym == keywords::Underscore.name() ||
-               ast::Ident::with_empty_ctxt(normalized_sym).is_path_segment_keyword() {
-                panic!("`{:?}` is not a valid raw identifier", string)
-            }
+        if is_raw && !ast::Ident::from_interned_str(sym.as_interned_str()).can_be_raw() {
+            panic!("`{}` cannot be a raw identifier", string);
         }
         Ident { sym, is_raw, span }
     }
@@ -410,14 +405,12 @@ impl server::TokenStream for Rustc<'_> {
         stream.is_empty()
     }
     fn from_str(&mut self, src: &str) -> Self::TokenStream {
-        let (tokens, errors) = parse::parse_stream_from_source_str(
+        parse::parse_stream_from_source_str(
             FileName::proc_macro_source_code(src.clone()),
             src.to_string(),
             self.sess,
             Some(self.call_site),
-        );
-        emit_unclosed_delims(&errors, &self.sess.span_diagnostic);
-        tokens
+        )
     }
     fn to_string(&mut self, stream: &Self::TokenStream) -> String {
         stream.to_string()
@@ -746,5 +739,8 @@ impl server::Span for Rustc<'_> {
     }
     fn resolved_at(&mut self, span: Self::Span, at: Self::Span) -> Self::Span {
         span.with_ctxt(at.ctxt())
+    }
+    fn source_text(&mut self,  span: Self::Span) -> Option<String> {
+        self.sess.source_map().span_to_snippet(span).ok()
     }
 }

@@ -1,20 +1,22 @@
 use crate::hir::Unsafety;
+use crate::hir::def::Namespace;
 use crate::hir::def_id::DefId;
 use crate::ty::{self, Ty, PolyFnSig, TypeFoldable, SubstsRef, TyCtxt};
+use crate::ty::print::{FmtPrinter, Printer};
 use crate::traits;
 use rustc_target::spec::abi::Abi;
-use crate::util::ppaux;
+use rustc_macros::HashStable;
 
 use std::fmt;
 use std::iter;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable, HashStable)]
 pub struct Instance<'tcx> {
     pub def: InstanceDef<'tcx>,
     pub substs: SubstsRef<'tcx>,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable, HashStable)]
 pub enum InstanceDef<'tcx> {
     Item(DefId),
     Intrinsic(DefId),
@@ -148,9 +150,7 @@ impl<'tcx> InstanceDef<'tcx> {
             _ => return true
         };
         match tcx.def_key(def_id).disambiguated_data.data {
-            DefPathData::StructCtor |
-            DefPathData::EnumVariant(..) |
-            DefPathData::ClosureExpr => true,
+            DefPathData::Ctor | DefPathData::ClosureExpr => true,
             _ => false
         }
     }
@@ -174,7 +174,13 @@ impl<'tcx> InstanceDef<'tcx> {
 
 impl<'tcx> fmt::Display for Instance<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        ppaux::parameterized(f, self.substs, self.def_id(), &[])?;
+        ty::tls::with(|tcx| {
+            let substs = tcx.lift(&self.substs).expect("could not lift for printing");
+            FmtPrinter::new(tcx, &mut *f, Namespace::ValueNS)
+                .print_def_path(self.def_id(), substs)?;
+            Ok(())
+        })?;
+
         match self.def {
             InstanceDef::Item(_) => Ok(()),
             InstanceDef::VtableShim(_) => {

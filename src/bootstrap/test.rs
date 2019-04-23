@@ -177,7 +177,7 @@ impl Step for Cargotest {
             cmd.arg(&builder.initial_cargo)
                 .arg(&out_dir)
                 .env("RUSTC", builder.rustc(compiler))
-                .env("RUSTDOC", builder.rustdoc(compiler.host)),
+                .env("RUSTDOC", builder.rustdoc(compiler)),
         );
     }
 }
@@ -414,7 +414,6 @@ impl Step for Miri {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct CompiletestTest {
-    stage: u32,
     host: Interned<String>,
 }
 
@@ -427,16 +426,14 @@ impl Step for CompiletestTest {
 
     fn make_run(run: RunConfig<'_>) {
         run.builder.ensure(CompiletestTest {
-            stage: run.builder.top_stage,
             host: run.target,
         });
     }
 
     /// Runs `cargo test` for compiletest.
     fn run(self, builder: &Builder<'_>) {
-        let stage = self.stage;
         let host = self.host;
-        let compiler = builder.compiler(stage, host);
+        let compiler = builder.compiler(0, host);
 
         let mut cargo = tool::prepare_tool_cargo(builder,
                                                  compiler,
@@ -563,7 +560,7 @@ impl Step for RustdocTheme {
                 builder.sysroot_libdir(self.compiler, self.compiler.host),
             )
             .env("CFG_RELEASE_CHANNEL", &builder.config.channel)
-            .env("RUSTDOC_REAL", builder.rustdoc(self.compiler.host))
+            .env("RUSTDOC_REAL", builder.rustdoc(self.compiler))
             .env("RUSTDOC_CRATE_VERSION", builder.rust_version())
             .env("RUSTC_BOOTSTRAP", "1");
         if let Some(linker) = builder.linker(self.compiler.host) {
@@ -574,12 +571,52 @@ impl Step for RustdocTheme {
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct RustdocJS {
+pub struct RustdocJSStd {
     pub host: Interned<String>,
     pub target: Interned<String>,
 }
 
-impl Step for RustdocJS {
+impl Step for RustdocJSStd {
+    type Output = ();
+    const DEFAULT: bool = true;
+    const ONLY_HOSTS: bool = true;
+
+    fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
+        run.path("src/test/rustdoc-js-std")
+    }
+
+    fn make_run(run: RunConfig<'_>) {
+        run.builder.ensure(RustdocJSStd {
+            host: run.host,
+            target: run.target,
+        });
+    }
+
+    fn run(self, builder: &Builder<'_>) {
+        if let Some(ref nodejs) = builder.config.nodejs {
+            let mut command = Command::new(nodejs);
+            command.args(&["src/tools/rustdoc-js-std/tester.js", &*self.host]);
+            builder.ensure(crate::doc::Std {
+                target: self.target,
+                stage: builder.top_stage,
+            });
+            builder.run(&mut command);
+        } else {
+            builder.info(
+                "No nodejs found, skipping \"src/test/rustdoc-js-std\" tests"
+            );
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct RustdocJSNotStd {
+    pub host: Interned<String>,
+    pub target: Interned<String>,
+    pub compiler: Compiler,
+}
+
+impl Step for RustdocJSNotStd {
     type Output = ();
     const DEFAULT: bool = true;
     const ONLY_HOSTS: bool = true;
@@ -589,21 +626,24 @@ impl Step for RustdocJS {
     }
 
     fn make_run(run: RunConfig<'_>) {
-        run.builder.ensure(RustdocJS {
+        let compiler = run.builder.compiler(run.builder.top_stage, run.host);
+        run.builder.ensure(RustdocJSNotStd {
             host: run.host,
             target: run.target,
+            compiler,
         });
     }
 
     fn run(self, builder: &Builder<'_>) {
-        if let Some(ref nodejs) = builder.config.nodejs {
-            let mut command = Command::new(nodejs);
-            command.args(&["src/tools/rustdoc-js/tester.js", &*self.host]);
-            builder.ensure(crate::doc::Std {
+        if builder.config.nodejs.is_some() {
+            builder.ensure(Compiletest {
+                compiler: self.compiler,
                 target: self.target,
-                stage: builder.top_stage,
+                mode: "js-doc-test",
+                suite: "rustdoc-js",
+                path: None,
+                compare_mode: None,
             });
-            builder.run(&mut command);
         } else {
             builder.info(
                 "No nodejs found, skipping \"src/test/rustdoc-js\" tests"
@@ -854,12 +894,10 @@ host_test!(Rustdoc {
     suite: "rustdoc"
 });
 
-test!(Pretty {
+host_test!(Pretty {
     path: "src/test/pretty",
     mode: "pretty",
-    suite: "pretty",
-    default: false,
-    host: true
+    suite: "pretty"
 });
 test!(RunPassPretty {
     path: "src/test/run-pass/pretty",
@@ -893,6 +931,12 @@ host_test!(RunMakeFullDeps {
     path: "src/test/run-make-fulldeps",
     mode: "run-make",
     suite: "run-make-fulldeps"
+});
+
+default_test!(Assembly {
+    path: "src/test/assembly",
+    mode: "assembly",
+    suite: "assembly"
 });
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -950,11 +994,7 @@ impl Step for Compiletest {
             });
         }
 
-        if suite.ends_with("fulldeps") ||
-            // FIXME: Does pretty need librustc compiled? Note that there are
-            // fulldeps test suites with mode = pretty as well.
-            mode == "pretty"
-        {
+        if suite.ends_with("fulldeps") {
             builder.ensure(compile::Rustc { compiler, target });
         }
 
@@ -976,7 +1016,10 @@ impl Step for Compiletest {
         // Also provide `rust_test_helpers` for the host.
         builder.ensure(native::TestHelpers { target: compiler.host });
 
-        builder.ensure(native::TestHelpers { target });
+        // wasm32 can't build the test helpers
+        if !target.contains("wasm32") {
+            builder.ensure(native::TestHelpers { target });
+        }
         builder.ensure(RemoteCopyLibs { compiler, target });
 
         let mut cmd = builder.tool_cmd(Tool::Compiletest);
@@ -990,15 +1033,16 @@ impl Step for Compiletest {
             .arg(builder.sysroot_libdir(compiler, target));
         cmd.arg("--rustc-path").arg(builder.rustc(compiler));
 
-        let is_rustdoc_ui = suite.ends_with("rustdoc-ui");
+        let is_rustdoc = suite.ends_with("rustdoc-ui") || suite.ends_with("rustdoc-js");
 
         // Avoid depending on rustdoc when we don't need it.
         if mode == "rustdoc"
             || (mode == "run-make" && suite.ends_with("fulldeps"))
-            || (mode == "ui" && is_rustdoc_ui)
+            || (mode == "ui" && is_rustdoc)
+            || mode == "js-doc-test"
         {
             cmd.arg("--rustdoc-path")
-                .arg(builder.rustdoc(compiler.host));
+                .arg(builder.rustdoc(compiler));
         }
 
         cmd.arg("--src-base")
@@ -1029,12 +1073,12 @@ impl Step for Compiletest {
             cmd.arg("--nodejs").arg(nodejs);
         }
 
-        let mut flags = if is_rustdoc_ui {
+        let mut flags = if is_rustdoc {
             Vec::new()
         } else {
             vec!["-Crpath".to_string()]
         };
-        if !is_rustdoc_ui {
+        if !is_rustdoc {
             if builder.config.rust_optimize_tests {
                 flags.push("-O".to_string());
             }
@@ -1156,7 +1200,7 @@ impl Step for Compiletest {
             cmd.arg("--quiet");
         }
 
-        if builder.config.llvm_enabled {
+        if builder.config.llvm_enabled() {
             let llvm_config = builder.ensure(native::Llvm {
                 target: builder.config.build,
                 emscripten: false,
@@ -1188,12 +1232,6 @@ impl Step for Compiletest {
                     cmd.arg("--ar").arg(ar);
                 }
             }
-        }
-        if suite == "run-make-fulldeps" && !builder.config.llvm_enabled {
-            builder.info(
-                "Ignoring run-make test suite as they generally don't work without LLVM"
-            );
-            return;
         }
 
         if suite != "run-make-fulldeps" {
@@ -1247,6 +1285,10 @@ impl Step for Compiletest {
                 .arg(builder.cc(target).parent().unwrap().parent().unwrap());
         } else {
             cmd.arg("--android-cross-path").arg("");
+        }
+
+        if builder.config.cmd.rustfix_coverage() {
+            cmd.arg("--rustfix-coverage");
         }
 
         builder.ci_env.force_coloring_in_ci(&mut cmd);
@@ -1386,6 +1428,7 @@ test_book!(
     EmbeddedBook, "src/doc/embedded-book", "embedded-book", default=false;
     TheBook, "src/doc/book", "book", default=false;
     UnstableBook, "src/doc/unstable-book", "unstable-book", default=true;
+    EditionGuide, "src/doc/edition-guide", "edition-guide", default=false;
 );
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -1426,7 +1469,10 @@ impl Step for ErrorIndex {
         t!(fs::create_dir_all(&dir));
         let output = dir.join("error-index.md");
 
-        let mut tool = builder.tool_cmd(Tool::ErrorIndex);
+        let mut tool = tool::ErrorIndex::command(
+            builder,
+            builder.compiler(compiler.stage, builder.config.build),
+        );
         tool.arg("markdown")
             .arg(&output)
             .env("CFG_BUILD", &builder.config.build)
@@ -1451,7 +1497,7 @@ fn markdown_test(builder: &Builder<'_>, compiler: Compiler, markdown: &Path) -> 
     }
 
     builder.info(&format!("doc tests for: {}", markdown.display()));
-    let mut cmd = builder.rustdoc_cmd(compiler.host);
+    let mut cmd = builder.rustdoc_cmd(compiler);
     builder.add_rust_test_threads(&mut cmd);
     cmd.arg("--test");
     cmd.arg(markdown);

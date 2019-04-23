@@ -9,10 +9,10 @@ use rustc::hir::def_id::DefId;
 use rustc::infer::canonical::Canonical;
 use rustc::middle::region;
 use rustc::ty::subst::SubstsRef;
-use rustc::ty::{AdtDef, UpvarSubsts, Ty, Const, LazyConst, UserType};
+use rustc::ty::{AdtDef, UpvarSubsts, Ty, Const, UserType};
+use rustc::ty::adjustment::{PointerCast};
 use rustc::ty::layout::VariantIdx;
 use rustc::hir;
-use syntax::ast;
 use syntax_pos::Span;
 use self::cx::Cx;
 
@@ -181,19 +181,8 @@ pub enum ExprKind<'tcx> {
     NeverToAny {
         source: ExprRef<'tcx>,
     },
-    ReifyFnPointer {
-        source: ExprRef<'tcx>,
-    },
-    ClosureFnPointer {
-        source: ExprRef<'tcx>,
-    },
-    UnsafeFnPointer {
-        source: ExprRef<'tcx>,
-    },
-    MutToConstPointer {
-        source: ExprRef<'tcx>,
-    },
-    Unsize {
+    Pointer {
+        cast: PointerCast,
         source: ExprRef<'tcx>,
     },
     If {
@@ -230,7 +219,7 @@ pub enum ExprKind<'tcx> {
         index: ExprRef<'tcx>,
     },
     VarRef {
-        id: ast::NodeId,
+        id: hir::HirId,
     },
     /// first argument, used for self in a closure
     SelfRef,
@@ -290,7 +279,7 @@ pub enum ExprKind<'tcx> {
         movability: Option<hir::GeneratorMovability>,
     },
     Literal {
-        literal: &'tcx LazyConst<'tcx>,
+        literal: &'tcx Const<'tcx>,
         user_ty: Option<Canonical<'tcx, UserType<'tcx>>>,
     },
     InlineAsm {

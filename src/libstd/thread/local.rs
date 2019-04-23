@@ -40,12 +40,15 @@ use crate::mem;
 /// });
 ///
 /// // each thread starts out with the initial value of 1
-/// thread::spawn(move|| {
+/// let t = thread::spawn(move|| {
 ///     FOO.with(|f| {
 ///         assert_eq!(*f.borrow(), 1);
 ///         *f.borrow_mut() = 3;
 ///     });
 /// });
+///
+/// // wait for the thread to complete and bail out on panic
+/// t.join().unwrap();
 ///
 /// // we retain our original value of 2 despite the child thread
 /// FOO.with(|f| {
@@ -97,7 +100,7 @@ pub struct LocalKey<T: 'static> {
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl<T: 'static> fmt::Debug for LocalKey<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("LocalKey { .. }")
     }
 }
@@ -201,14 +204,14 @@ pub struct AccessError {
 
 #[stable(feature = "thread_local_try_with", since = "1.26.0")]
 impl fmt::Debug for AccessError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AccessError").finish()
     }
 }
 
 #[stable(feature = "thread_local_try_with", since = "1.26.0")]
 impl fmt::Display for AccessError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt("already destroyed", f)
     }
 }
@@ -316,7 +319,7 @@ pub mod statik {
     unsafe impl<T> Sync for Key<T> { }
 
     impl<T> fmt::Debug for Key<T> {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.pad("Key { .. }")
         }
     }
@@ -353,7 +356,7 @@ pub mod fast {
     }
 
     impl<T> fmt::Debug for Key<T> {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.pad("Key { .. }")
         }
     }
@@ -421,7 +424,7 @@ pub mod os {
     }
 
     impl<T> fmt::Debug for Key<T> {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.pad("Key { .. }")
         }
     }
@@ -527,7 +530,7 @@ mod tests {
 
         thread::spawn(|| {
             assert!(FOO.try_with(|_| ()).is_ok());
-        }).join().ok().unwrap();
+        }).join().ok().expect("thread panicked");
     }
 
     #[test]
@@ -581,7 +584,7 @@ mod tests {
 
         thread::spawn(move|| {
             drop(S1);
-        }).join().ok().unwrap();
+        }).join().ok().expect("thread panicked");
     }
 
     #[test]
@@ -597,7 +600,7 @@ mod tests {
 
         thread::spawn(move|| unsafe {
             K1.with(|s| *s.get() = Some(S1));
-        }).join().ok().unwrap();
+        }).join().ok().expect("thread panicked");
     }
 
     // Note that this test will deadlock if TLS destructors aren't run (this

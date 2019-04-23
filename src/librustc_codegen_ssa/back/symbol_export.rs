@@ -209,7 +209,7 @@ fn exported_symbols_provider_local<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         }
     }
 
-    if tcx.sess.opts.debugging_opts.pgo_gen.is_some() {
+    if tcx.sess.opts.debugging_opts.pgo_gen.enabled() {
         // These are weak symbols that point to the profile version and the
         // profile name, which need to be treated as exported so LTO doesn't nix
         // them.
@@ -263,7 +263,7 @@ fn exported_symbols_provider_local<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 def: InstanceDef::Item(def_id),
                 substs,
             }) = mono_item {
-                if substs.types().next().is_some() {
+                if substs.non_erasable_generics().next().is_some() {
                     symbols.push((ExportedSymbol::Generic(def_id, substs),
                                   SymbolExportLevel::Rust));
                 }

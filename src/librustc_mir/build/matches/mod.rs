@@ -10,12 +10,13 @@ use crate::build::ForGuard::{self, OutsideGuard, RefWithinGuard};
 use crate::build::{BlockAnd, BlockAndExtension, Builder};
 use crate::build::{GuardFrame, GuardFrameLocal, LocalsForNode};
 use crate::hair::{self, *};
+use rustc::hir::HirId;
 use rustc::mir::*;
 use rustc::ty::{self, CanonicalUserTypeAnnotation, Ty};
 use rustc::ty::layout::VariantIdx;
 use rustc_data_structures::bit_set::BitSet;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use syntax::ast::{Name, NodeId};
+use syntax::ast::Name;
 use syntax_pos::Span;
 
 // helper functions, broken out by category:
@@ -373,7 +374,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 let ty_source_info = self.source_info(user_ty_span);
                 let user_ty = box pat_ascription_ty.user_ty(
                     &mut self.canonical_user_type_annotations,
-                    place.ty(&self.local_decls, self.hir.tcx()).to_ty(self.hir.tcx()),
+                    place.ty(&self.local_decls, self.hir.tcx()).ty,
                     ty_source_info.span,
                 );
                 self.cfg.push(
@@ -438,11 +439,17 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         self.simplify_candidate(&mut candidate);
 
         if !candidate.match_pairs.is_empty() {
-            span_bug!(
+            // ICE if no other errors have been emitted. This used to be a hard error that wouldn't
+            // be reached because `hair::pattern::check_match::check_match` wouldn't have let the
+            // compiler continue. In our tests this is only ever hit by
+            // `ui/consts/const-match-check.rs` with `--cfg eval1`, and that file already generates
+            // a different error before hand.
+            self.hir.tcx().sess.delay_span_bug(
                 candidate.match_pairs[0].pattern.span,
-                "match pairs {:?} remaining after simplifying \
-                 irrefutable pattern",
-                candidate.match_pairs
+                &format!(
+                    "match pairs {:?} remaining after simplifying irrefutable pattern",
+                    candidate.match_pairs,
+                ),
             );
         }
 
@@ -530,7 +537,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
     pub fn storage_live_binding(
         &mut self,
         block: BasicBlock,
-        var: NodeId,
+        var: HirId,
         span: Span,
         for_guard: ForGuard,
     ) -> Place<'tcx> {
@@ -545,17 +552,15 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         );
         let place = Place::Base(PlaceBase::Local(local_id));
         let var_ty = self.local_decls[local_id].ty;
-        let hir_id = self.hir.tcx().hir().node_to_hir_id(var);
-        let region_scope = self.hir.region_scope_tree.var_scope(hir_id.local_id);
+        let region_scope = self.hir.region_scope_tree.var_scope(var.local_id);
         self.schedule_drop(span, region_scope, &place, var_ty, DropKind::Storage);
         place
     }
 
-    pub fn schedule_drop_for_binding(&mut self, var: NodeId, span: Span, for_guard: ForGuard) {
+    pub fn schedule_drop_for_binding(&mut self, var: HirId, span: Span, for_guard: ForGuard) {
         let local_id = self.var_local_id(var, for_guard);
         let var_ty = self.local_decls[local_id].ty;
-        let hir_id = self.hir.tcx().hir().node_to_hir_id(var);
-        let region_scope = self.hir.region_scope_tree.var_scope(hir_id.local_id);
+        let region_scope = self.hir.region_scope_tree.var_scope(var.local_id);
         self.schedule_drop(
             span,
             region_scope,
@@ -570,16 +575,16 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
     pub(super) fn visit_bindings(
         &mut self,
         pattern: &Pattern<'tcx>,
-        pattern_user_ty: UserTypeProjections<'tcx>,
+        pattern_user_ty: UserTypeProjections,
         f: &mut impl FnMut(
             &mut Self,
             Mutability,
             Name,
             BindingMode,
-            NodeId,
+            HirId,
             Span,
             Ty<'tcx>,
-            UserTypeProjections<'tcx>,
+            UserTypeProjections,
         ),
     ) {
         debug!("visit_bindings: pattern={:?} pattern_user_ty={:?}", pattern, pattern_user_ty);
@@ -703,7 +708,7 @@ struct Binding<'tcx> {
     span: Span,
     source: Place<'tcx>,
     name: Name,
-    var_id: NodeId,
+    var_id: HirId,
     var_ty: Ty<'tcx>,
     mutability: Mutability,
     binding_mode: BindingMode,
@@ -1288,7 +1293,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         debug!("add_fake_borrows all_fake_borrows = {:?}", all_fake_borrows);
 
         all_fake_borrows.into_iter().map(|matched_place| {
-            let fake_borrow_deref_ty = matched_place.ty(&self.local_decls, tcx).to_ty(tcx);
+            let fake_borrow_deref_ty = matched_place.ty(&self.local_decls, tcx).ty;
             let fake_borrow_ty = tcx.mk_imm_ref(tcx.types.re_erased, fake_borrow_deref_ty);
             let fake_borrow_temp = self.local_decls.push(
                 LocalDecl::new_temp(fake_borrow_ty, temp_span)
@@ -1420,26 +1425,22 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         //      the reference that we create for the arm.
         //    * So we eagerly create the reference for the arm and then take a
         //      reference to that.
-        let tcx = self.hir.tcx();
-        let autoref = tcx.all_pat_vars_are_implicit_refs_within_guards();
         if let Some(guard) = guard {
-            if autoref {
-                self.bind_matched_candidate_for_guard(
-                    block,
-                    &candidate.bindings,
-                );
-                let guard_frame = GuardFrame {
-                    locals: candidate
-                        .bindings
-                        .iter()
-                        .map(|b| GuardFrameLocal::new(b.var_id, b.binding_mode))
-                        .collect(),
-                };
-                debug!("Entering guard building context: {:?}", guard_frame);
-                self.guard_context.push(guard_frame);
-            } else {
-                self.bind_matched_candidate_for_arm_body(block, &candidate.bindings);
-            }
+            let tcx = self.hir.tcx();
+
+            self.bind_matched_candidate_for_guard(
+                block,
+                &candidate.bindings,
+            );
+            let guard_frame = GuardFrame {
+                locals: candidate
+                    .bindings
+                    .iter()
+                    .map(|b| GuardFrameLocal::new(b.var_id, b.binding_mode))
+                    .collect(),
+            };
+            debug!("Entering guard building context: {:?}", guard_frame);
+            self.guard_context.push(guard_frame);
 
             let re_erased = tcx.types.re_erased;
             let scrutinee_source_info = self.source_info(scrutinee_span);
@@ -1465,13 +1466,11 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             let source_info = self.source_info(guard.span);
             let guard_end = self.source_info(tcx.sess.source_map().end_point(guard.span));
             let cond = unpack!(block = self.as_local_operand(block, guard));
-            if autoref {
-                let guard_frame = self.guard_context.pop().unwrap();
-                debug!(
-                    "Exiting guard building context with locals: {:?}",
-                    guard_frame
-                );
-            }
+            let guard_frame = self.guard_context.pop().unwrap();
+            debug!(
+                "Exiting guard building context with locals: {:?}",
+                guard_frame
+            );
 
             for &(_, temp) in fake_borrows {
                 self.cfg.push(block, Statement {
@@ -1521,28 +1520,26 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 ),
             );
 
-            if autoref {
-                let by_value_bindings = candidate.bindings.iter().filter(|binding| {
-                    if let BindingMode::ByValue = binding.binding_mode { true } else { false }
-                });
-                // Read all of the by reference bindings to ensure that the
-                // place they refer to can't be modified by the guard.
-                for binding in by_value_bindings.clone() {
-                    let local_id = self.var_local_id(binding.var_id, RefWithinGuard);
+            let by_value_bindings = candidate.bindings.iter().filter(|binding| {
+                if let BindingMode::ByValue = binding.binding_mode { true } else { false }
+            });
+            // Read all of the by reference bindings to ensure that the
+            // place they refer to can't be modified by the guard.
+            for binding in by_value_bindings.clone() {
+                let local_id = self.var_local_id(binding.var_id, RefWithinGuard);
                     let place = Place::Base(PlaceBase::Local(local_id));
-                    self.cfg.push(
-                        block,
-                        Statement {
-                            source_info: guard_end,
-                            kind: StatementKind::FakeRead(FakeReadCause::ForGuardBinding, place),
-                        },
-                    );
-                }
-                self.bind_matched_candidate_for_arm_body(
-                    post_guard_block,
-                    by_value_bindings,
+                self.cfg.push(
+                    block,
+                    Statement {
+                        source_info: guard_end,
+                        kind: StatementKind::FakeRead(FakeReadCause::ForGuardBinding, place),
+                    },
                 );
             }
+            self.bind_matched_candidate_for_arm_body(
+                post_guard_block,
+                by_value_bindings,
+            );
 
             self.cfg.terminate(
                 post_guard_block,
@@ -1582,7 +1579,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
 
             let user_ty = box ascription.user_ty.clone().user_ty(
                 &mut self.canonical_user_type_annotations,
-                ascription.source.ty(&self.local_decls, self.hir.tcx()).to_ty(self.hir.tcx()),
+                ascription.source.ty(&self.local_decls, self.hir.tcx()).ty,
                 source_info.span
             );
             self.cfg.push(
@@ -1599,8 +1596,6 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         }
     }
 
-    // Only called when all_pat_vars_are_implicit_refs_within_guards,
-    // and thus all code/comments assume we are in that context.
     fn bind_matched_candidate_for_guard(
         &mut self,
         block: BasicBlock,
@@ -1694,9 +1689,9 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         mutability: Mutability,
         name: Name,
         mode: BindingMode,
-        var_id: NodeId,
+        var_id: HirId,
         var_ty: Ty<'tcx>,
-        user_ty: UserTypeProjections<'tcx>,
+        user_ty: UserTypeProjections,
         has_guard: ArmHasGuard,
         opt_match_place: Option<(Option<Place<'tcx>>, Span)>,
         pat_span: Span,
@@ -1734,7 +1729,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             }))),
         };
         let for_arm_body = self.local_decls.push(local.clone());
-        let locals = if has_guard.0 && tcx.all_pat_vars_are_implicit_refs_within_guards() {
+        let locals = if has_guard.0 {
             let ref_for_guard = self.local_decls.push(LocalDecl::<'tcx> {
                 // This variable isn't mutated but has a name, so has to be
                 // immutable to avoid the unused mut lint.

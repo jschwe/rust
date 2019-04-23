@@ -22,9 +22,9 @@ LL |     let x: Vec<Trait + Sized> = Vec::new();
    |
    = help: the trait `std::marker::Sized` is not implemented for `dyn Trait`
    = note: to learn more, visit <https://doc.rust-lang.org/book/ch19-04-advanced-types.html#dynamically-sized-types-and-the-sized-trait>
-   = note: required by `<std::vec::Vec<T>>::new`
+   = note: required by `std::vec::Vec::<T>::new`
 
 error: aborting due to 3 previous errors
 
-Some errors occurred: E0225, E0277.
+Some errors have detailed explanations: E0225, E0277.
 For more information about an error, try `rustc --explain E0225`.

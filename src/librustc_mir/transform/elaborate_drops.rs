@@ -11,11 +11,11 @@ use crate::util::elaborate_drops::{DropFlagState, Unwind, elaborate_drop};
 use crate::util::elaborate_drops::{DropElaborator, DropStyle, DropFlagMode};
 use rustc::ty::{self, TyCtxt};
 use rustc::ty::layout::VariantIdx;
+use rustc::hir;
 use rustc::mir::*;
 use rustc::util::nodemap::FxHashMap;
 use rustc_data_structures::bit_set::BitSet;
 use std::fmt;
-use syntax::ast;
 use syntax_pos::Span;
 
 pub struct ElaborateDrops;
@@ -28,7 +28,7 @@ impl MirPass for ElaborateDrops {
     {
         debug!("elaborate_drops({:?} @ {:?})", src, mir.span);
 
-        let id = tcx.hir().as_local_node_id(src.def_id()).unwrap();
+        let def_id = src.def_id();
         let param_env = tcx.param_env(src.def_id()).with_reveal_all();
         let move_data = match MoveData::gather_moves(mir, tcx) {
             Ok(move_data) => move_data,
@@ -50,13 +50,13 @@ impl MirPass for ElaborateDrops {
                 move_data,
                 param_env,
             };
-            let dead_unwinds = find_dead_unwinds(tcx, mir, id, &env);
+            let dead_unwinds = find_dead_unwinds(tcx, mir, def_id, &env);
             let flow_inits =
-                do_dataflow(tcx, mir, id, &[], &dead_unwinds,
+                do_dataflow(tcx, mir, def_id, &[], &dead_unwinds,
                             MaybeInitializedPlaces::new(tcx, mir, &env),
                             |bd, p| DebugFormatted::new(&bd.move_data().move_paths[p]));
             let flow_uninits =
-                do_dataflow(tcx, mir, id, &[], &dead_unwinds,
+                do_dataflow(tcx, mir, def_id, &[], &dead_unwinds,
                             MaybeUninitializedPlaces::new(tcx, mir, &env),
                             |bd, p| DebugFormatted::new(&bd.move_data().move_paths[p]));
 
@@ -80,7 +80,7 @@ impl MirPass for ElaborateDrops {
 fn find_dead_unwinds<'a, 'tcx>(
     tcx: TyCtxt<'a, 'tcx, 'tcx>,
     mir: &Mir<'tcx>,
-    id: ast::NodeId,
+    def_id: hir::def_id::DefId,
     env: &MoveDataParamEnv<'tcx, 'tcx>)
     -> BitSet<BasicBlock>
 {
@@ -89,7 +89,7 @@ fn find_dead_unwinds<'a, 'tcx>(
     // reach cleanup blocks, which can't have unwind edges themselves.
     let mut dead_unwinds = BitSet::new_empty(mir.basic_blocks().len());
     let flow_inits =
-        do_dataflow(tcx, mir, id, &[], &dead_unwinds,
+        do_dataflow(tcx, mir, def_id, &[], &dead_unwinds,
                     MaybeInitializedPlaces::new(tcx, mir, &env),
                     |bd, p| DebugFormatted::new(&bd.move_data().move_paths[p]));
     for (bb, bb_data) in mir.basic_blocks().iter_enumerated() {
@@ -533,9 +533,9 @@ impl<'b, 'tcx> ElaborateDropsCtxt<'b, 'tcx> {
             span,
             ty: self.tcx.types.bool,
             user_ty: None,
-            literal: self.tcx.mk_lazy_const(ty::LazyConst::Evaluated(
+            literal: self.tcx.mk_const(
                 ty::Const::from_bool(self.tcx, val),
-            )),
+            ),
         })))
     }
 

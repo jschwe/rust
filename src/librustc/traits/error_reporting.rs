@@ -389,7 +389,8 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
         for param in generics.params.iter() {
             let value = match param.kind {
-                GenericParamDefKind::Type {..} => {
+                GenericParamDefKind::Type { .. } |
+                GenericParamDefKind::Const => {
                     trait_ref.substs[param.index as usize].to_string()
                 },
                 GenericParamDefKind::Lifetime => continue,
@@ -598,11 +599,12 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
         }
     }
 
-    pub fn report_selection_error(&self,
-                                  obligation: &PredicateObligation<'tcx>,
-                                  error: &SelectionError<'tcx>,
-                                  fallback_has_occurred: bool)
-    {
+    pub fn report_selection_error(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        error: &SelectionError<'tcx>,
+        fallback_has_occurred: bool,
+    ) {
         let span = obligation.cause.span;
 
         let mut err = match *error {
@@ -636,6 +638,18 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                         let OnUnimplementedNote { message, label, note }
                             = self.on_unimplemented_note(trait_ref, obligation);
                         let have_alt_message = message.is_some() || label.is_some();
+                        let is_try = self.tcx.sess.source_map().span_to_snippet(span)
+                            .map(|s| &s == "?")
+                            .unwrap_or(false);
+                        let is_from = format!("{}", trait_ref).starts_with("std::convert::From<");
+                        let message = if is_try && is_from {
+                            Some(format!(
+                                "`?` couldn't convert the error to `{}`",
+                                trait_ref.self_ty(),
+                            ))
+                        } else {
+                            message
+                        };
 
                         let mut err = struct_span_err!(
                             self.tcx.sess,
@@ -672,6 +686,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
                         self.suggest_borrow_on_unsized_slice(&obligation.cause.code, &mut err);
                         self.suggest_remove_reference(&obligation, &mut err, &trait_ref);
+                        self.suggest_semicolon_removal(&obligation, &mut err, span, &trait_ref);
 
                         // Try to report a help message
                         if !trait_ref.has_infer_types() &&
@@ -751,16 +766,22 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     ty::Predicate::ObjectSafe(trait_def_id) => {
                         let violations = self.tcx.global_tcx()
                             .object_safety_violations(trait_def_id);
-                        self.tcx.report_object_safety_error(span,
-                                                            trait_def_id,
-                                                            violations)
+                        if let Some(err) = self.tcx.report_object_safety_error(
+                            span,
+                            trait_def_id,
+                            violations,
+                        ) {
+                            err
+                        } else {
+                            return;
+                        }
                     }
 
                     ty::Predicate::ClosureKind(closure_def_id, closure_substs, kind) => {
                         let found_kind = self.closure_kind(closure_def_id, closure_substs).unwrap();
                         let closure_span = self.tcx.sess.source_map()
                             .def_span(self.tcx.hir().span_if_local(closure_def_id).unwrap());
-                        let node_id = self.tcx.hir().as_local_node_id(closure_def_id).unwrap();
+                        let hir_id = self.tcx.hir().as_local_hir_id(closure_def_id).unwrap();
                         let mut err = struct_span_err!(
                             self.tcx.sess, closure_span, E0525,
                             "expected a closure that implements the `{}` trait, \
@@ -779,8 +800,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                         // a particular trait.
                         if let Some(tables) = self.in_progress_tables {
                             let tables = tables.borrow();
-                            let closure_hir_id = self.tcx.hir().node_to_hir_id(node_id);
-                            match (found_kind, tables.closure_kind_origins().get(closure_hir_id)) {
+                            match (found_kind, tables.closure_kind_origins().get(hir_id)) {
                                 (ty::ClosureKind::FnOnce, Some((span, name))) => {
                                     err.span_label(*span, format!(
                                         "closure is `FnOnce` because it moves the \
@@ -852,10 +872,11 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     _ => vec![ArgKind::empty()],
                 };
 
-                let expected = match expected_trait_ref.skip_binder().substs.type_at(1).sty {
+                let expected_ty = expected_trait_ref.skip_binder().substs.type_at(1);
+                let expected = match expected_ty.sty {
                     ty::Tuple(ref tys) => tys.iter()
                         .map(|t| ArgKind::from_expected_ty(t, Some(span))).collect(),
-                    ref sty => vec![ArgKind::Arg("_".to_owned(), sty.to_string())],
+                    _ => vec![ArgKind::Arg("_".to_owned(), expected_ty.to_string())],
                 };
 
                 if found.len() == expected.len() {
@@ -881,7 +902,11 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
             TraitNotObjectSafe(did) => {
                 let violations = self.tcx.global_tcx().object_safety_violations(did);
-                self.tcx.report_object_safety_error(span, did, violations)
+                if let Some(err) = self.tcx.report_object_safety_error(span, did, violations) {
+                    err
+                } else {
+                    return;
+                }
             }
 
             // already reported in the query
@@ -900,9 +925,11 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
     /// When encountering an assignment of an unsized trait, like `let x = ""[..];`, provide a
     /// suggestion to borrow the initializer in order to use have a slice instead.
-    fn suggest_borrow_on_unsized_slice(&self,
-                                       code: &ObligationCauseCode<'tcx>,
-                                       err: &mut DiagnosticBuilder<'tcx>) {
+    fn suggest_borrow_on_unsized_slice(
+        &self,
+        code: &ObligationCauseCode<'tcx>,
+        err: &mut DiagnosticBuilder<'tcx>,
+    ) {
         if let &ObligationCauseCode::VariableType(node_id) = code {
             let parent_node = self.tcx.hir().get_parent_node(node_id);
             if let Some(Node::Local(ref local)) = self.tcx.hir().find(parent_node) {
@@ -924,10 +951,12 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
     /// Whenever references are used by mistake, like `for (i, e) in &vec.iter().enumerate()`,
     /// suggest removing these references until we reach a type that implements the trait.
-    fn suggest_remove_reference(&self,
-                                obligation: &PredicateObligation<'tcx>,
-                                err: &mut DiagnosticBuilder<'tcx>,
-                                trait_ref: &ty::Binder<ty::TraitRef<'tcx>>) {
+    fn suggest_remove_reference(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        err: &mut DiagnosticBuilder<'tcx>,
+        trait_ref: &ty::Binder<ty::TraitRef<'tcx>>,
+    ) {
         let trait_ref = trait_ref.skip_binder();
         let span = obligation.cause.span;
 
@@ -964,6 +993,40 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     }
                 } else {
                     break;
+                }
+            }
+        }
+    }
+
+    fn suggest_semicolon_removal(
+        &self,
+        obligation: &PredicateObligation<'tcx>,
+        err: &mut DiagnosticBuilder<'tcx>,
+        span: Span,
+        trait_ref: &ty::Binder<ty::TraitRef<'tcx>>,
+    ) {
+        let hir = self.tcx.hir();
+        let parent_node = hir.get_parent_node(
+            hir.hir_to_node_id(obligation.cause.body_id),
+        );
+        let node = hir.find(parent_node);
+        if let Some(hir::Node::Item(hir::Item {
+            node: hir::ItemKind::Fn(decl, _, _, body_id),
+            ..
+        })) = node {
+            let body = hir.body(*body_id);
+            if let hir::ExprKind::Block(blk, _) = &body.value.node {
+                if decl.output.span().overlaps(span) && blk.expr.is_none() &&
+                    "()" == &trait_ref.self_ty().to_string()
+                {
+                    // FIXME(estebank): When encountering a method with a trait
+                    // bound not satisfied in the return type with a body that has
+                    // no return, suggest removal of semicolon on last statement.
+                    // Once that is added, close #54771.
+                    if let Some(ref stmt) = blk.stmts.last() {
+                        let sp = self.tcx.sess.source_map().end_point(stmt.span);
+                        err.span_label(sp, "consider removing this semicolon");
+                    }
                 }
             }
         }
@@ -1026,23 +1089,13 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     _ => ArgKind::empty()
                 }).collect::<Vec<ArgKind>>())
             }
-            Node::Variant(&hir::Variant {
-                span,
-                node: hir::VariantKind {
-                    data: hir::VariantData::Tuple(ref fields, ..),
-                    ..
-                },
-                ..
-            }) => {
-                (self.tcx.sess.source_map().def_span(span),
-                 fields.iter().map(|field|
-                     ArgKind::Arg(field.ident.to_string(), "_".to_string())
-                 ).collect::<Vec<_>>())
-            }
-            Node::StructCtor(ref variant_data) => {
-                (self.tcx.sess.source_map().def_span(
-                    self.tcx.hir().span_by_hir_id(variant_data.hir_id())),
-                 vec![ArgKind::empty(); variant_data.fields().len()])
+            Node::Ctor(ref variant_data) => {
+                let span = variant_data.ctor_hir_id()
+                    .map(|hir_id| self.tcx.hir().span_by_hir_id(hir_id))
+                    .unwrap_or(DUMMY_SP);
+                let span = self.tcx.sess.source_map().def_span(span);
+
+                (span, vec![ArgKind::empty(); variant_data.fields().len()])
             }
             _ => panic!("non-FnLike node found: {:?}", node),
         }
@@ -1244,21 +1297,25 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         let span = self.sess.source_map().def_span(span);
         let mut err = struct_span_err!(self.sess, span, E0072,
                                        "recursive type `{}` has infinite size",
-                                       self.item_path_str(type_def_id));
+                                       self.def_path_str(type_def_id));
         err.span_label(span, "recursive type has infinite size");
         err.help(&format!("insert indirection (e.g., a `Box`, `Rc`, or `&`) \
                            at some point to make `{}` representable",
-                          self.item_path_str(type_def_id)));
+                          self.def_path_str(type_def_id)));
         err
     }
 
-    pub fn report_object_safety_error(self,
-                                      span: Span,
-                                      trait_def_id: DefId,
-                                      violations: Vec<ObjectSafetyViolation>)
-                                      -> DiagnosticBuilder<'tcx>
-    {
-        let trait_str = self.item_path_str(trait_def_id);
+    pub fn report_object_safety_error(
+        self,
+        span: Span,
+        trait_def_id: DefId,
+        violations: Vec<ObjectSafetyViolation>,
+    ) -> Option<DiagnosticBuilder<'tcx>> {
+        if self.sess.trait_methods_not_found.borrow().contains(&span) {
+            // Avoid emitting error caused by non-existing method (#58734)
+            return None;
+        }
+        let trait_str = self.def_path_str(trait_def_id);
         let span = self.sess.source_map().def_span(span);
         let mut err = struct_span_err!(
             self.sess, span, E0038,
@@ -1272,7 +1329,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                 err.note(&violation.error_msg());
             }
         }
-        err
+        Some(err)
     }
 }
 
@@ -1483,7 +1540,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                                   region, object_ty));
             }
             ObligationCauseCode::ItemObligation(item_def_id) => {
-                let item_name = tcx.item_path_str(item_def_id);
+                let item_name = tcx.def_path_str(item_def_id);
                 let msg = format!("required by `{}`", item_name);
 
                 if let Some(sp) = tcx.hir().span_if_local(item_def_id) {
@@ -1646,10 +1703,10 @@ impl ArgKind {
             ty::Tuple(ref tys) => ArgKind::Tuple(
                 span,
                 tys.iter()
-                   .map(|ty| ("_".to_owned(), ty.sty.to_string()))
+                   .map(|ty| ("_".to_owned(), ty.to_string()))
                    .collect::<Vec<_>>()
             ),
-            _ => ArgKind::Arg("_".to_owned(), t.sty.to_string()),
+            _ => ArgKind::Arg("_".to_owned(), t.to_string()),
         }
     }
 }

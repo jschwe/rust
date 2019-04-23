@@ -15,7 +15,7 @@ use crate::namespace::Namespace;
 use errors::{Applicability, DiagnosticBuilder};
 use rustc_data_structures::sync::Lrc;
 use rustc::hir;
-use rustc::hir::def::Def;
+use rustc::hir::def::{CtorOf, Def};
 use rustc::hir::def_id::DefId;
 use rustc::traits;
 use rustc::ty::subst::{InternalSubsts, SubstsRef};
@@ -196,7 +196,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         )?;
 
         if let Some(import_id) = pick.import_id {
-            let import_def_id = self.tcx.hir().local_def_id(import_id);
+            let import_def_id = self.tcx.hir().local_def_id_from_hir_id(import_id);
             debug!("used_trait_import: {:?}", import_def_id);
             Lrc::get_mut(&mut self.tables.borrow_mut().used_trait_imports)
                 .unwrap().insert(import_def_id);
@@ -283,8 +283,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         // Construct a trait-reference `self_ty : Trait<input_tys>`
         let substs = InternalSubsts::for_item(self.tcx, trait_def_id, |param, _| {
             match param.kind {
-                GenericParamDefKind::Lifetime => {}
-                GenericParamDefKind::Type {..} => {
+                GenericParamDefKind::Lifetime | GenericParamDefKind::Const => {}
+                GenericParamDefKind::Type { .. } => {
                     if param.index == 0 {
                         return self_ty.into();
                     } else if let Some(ref input_types) = opt_input_types {
@@ -417,7 +417,12 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 if let Some(variant_def) = variant_def {
                     check_type_alias_enum_variants_enabled(tcx, span);
 
-                    let def = Def::VariantCtor(variant_def.did, variant_def.ctor_kind);
+                    // Braced variants generate unusable names in value namespace (reserved for
+                    // possible future use), so variants resolved as associated items may refer to
+                    // them as well. It's ok to use the variant's id as a ctor id since an
+                    // error will be reported on any use of such resolution anyway.
+                    let ctor_def_id = variant_def.ctor_def_id.unwrap_or(variant_def.def_id);
+                    let def = Def::Ctor(ctor_def_id, CtorOf::Variant, variant_def.ctor_kind);
                     tcx.check_stability(def.def_id(), Some(expr_id), span);
                     return Ok(def);
                 }
@@ -428,7 +433,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                        self_ty, expr_id, ProbeScope::TraitsInScope)?;
         debug!("resolve_ufcs: pick={:?}", pick);
         if let Some(import_id) = pick.import_id {
-            let import_def_id = tcx.hir().local_def_id(import_id);
+            let import_def_id = tcx.hir().local_def_id_from_hir_id(import_id);
             debug!("resolve_ufcs: used_trait_import: {:?}", import_def_id);
             Lrc::get_mut(&mut self.tables.borrow_mut().used_trait_imports)
                 .unwrap().insert(import_def_id);

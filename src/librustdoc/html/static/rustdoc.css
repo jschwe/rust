@@ -345,7 +345,7 @@ nav.sub {
 	margin: 0;
 }
 .docblock-short code {
-	white-space: nowrap;
+	white-space: pre-wrap;
 }
 
 .docblock h1, .docblock h2, .docblock h3, .docblock h4, .docblock h5 {
@@ -1195,7 +1195,7 @@ pre.rust {
 	border-top: 2px solid;
 }
 
-#titles > div:not(:last-child):not(.selected) {
+#titles > div:not(:last-child) {
 	margin-right: 1px;
 	width: calc(33.3% - 1px);
 }
@@ -1576,4 +1576,18 @@ div.name.expand::before {
 	transform: rotate(90deg);
 	left: -15px;
 	top: 2px;
+}
+
+/* This part is to fix the "Expand attributes" part in the type declaration. */
+.type-decl > pre > :first-child {
+	margin-left: 0 !important;
+}
+.type-decl > pre > :nth-child(2) {
+	margin-left: 1.8em !important;
+}
+.type-decl > pre > .toggle-attributes {
+	margin-left: 2.2em;
+}
+.type-decl > pre > .docblock.attributes {
+	margin-left: 4em;
 }

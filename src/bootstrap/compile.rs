@@ -20,7 +20,7 @@ use filetime::FileTime;
 use serde_json;
 
 use crate::dist;
-use crate::util::{exe, libdir, is_dylib};
+use crate::util::{exe, is_dylib};
 use crate::{Compiler, Mode, GitRepo};
 use crate::native;
 
@@ -127,6 +127,13 @@ fn copy_third_party_objects(builder: &Builder<'_>, compiler: &Compiler, target: 
                 &libdir.join(obj),
             );
         }
+    } else if target.ends_with("-wasi") {
+        for &obj in &["crt1.o"] {
+            builder.copy(
+                &builder.wasi_root(target).unwrap().join("lib/wasm32-wasi").join(obj),
+                &libdir.join(obj),
+            );
+        }
     }
 
     // Copies libunwind.a compiled to be linked wit x86_64-fortanix-unknown-sgx.
@@ -188,6 +195,12 @@ pub fn std_cargo(builder: &Builder<'_>,
                 cargo.env("MUSL_ROOT", p);
             }
         }
+
+        if target.ends_with("-wasi") {
+            if let Some(p) = builder.wasi_root(target) {
+                cargo.env("WASI_ROOT", p);
+            }
+        }
     }
 }
 
@@ -224,7 +237,8 @@ impl Step for StdLink {
                 target_compiler.host,
                 target));
         let libdir = builder.sysroot_libdir(target_compiler, target);
-        add_to_sysroot(builder, &libdir, &libstd_stamp(builder, compiler, target));
+        let hostdir = builder.sysroot_libdir(target_compiler, compiler.host);
+        add_to_sysroot(builder, &libdir, &hostdir, &libstd_stamp(builder, compiler, target));
 
         if builder.config.sanitizers && compiler.stage != 0 && target == "x86_64-apple-darwin" {
             // The sanitizers are only built in stage1 or above, so the dylibs will
@@ -431,8 +445,12 @@ impl Step for TestLink {
                 &compiler.host,
                 target_compiler.host,
                 target));
-        add_to_sysroot(builder, &builder.sysroot_libdir(target_compiler, target),
-                    &libtest_stamp(builder, compiler, target));
+        add_to_sysroot(
+            builder,
+            &builder.sysroot_libdir(target_compiler, target),
+            &builder.sysroot_libdir(target_compiler, compiler.host),
+            &libtest_stamp(builder, compiler, target)
+        );
 
         builder.cargo(target_compiler, Mode::ToolTest, target, "clean");
     }
@@ -496,8 +514,8 @@ impl Step for Rustc {
             return;
         }
 
-        // Ensure that build scripts have a std to link against.
-        builder.ensure(Std {
+        // Ensure that build scripts and proc macros have a std / libproc_macro to link against.
+        builder.ensure(Test {
             compiler: builder.compiler(self.compiler.stage, builder.config.build),
             target: builder.config.build,
         });
@@ -592,8 +610,12 @@ impl Step for RustcLink {
                  &compiler.host,
                  target_compiler.host,
                  target));
-        add_to_sysroot(builder, &builder.sysroot_libdir(target_compiler, target),
-                       &librustc_stamp(builder, compiler, target));
+        add_to_sysroot(
+            builder,
+            &builder.sysroot_libdir(target_compiler, target),
+            &builder.sysroot_libdir(target_compiler, compiler.host),
+            &librustc_stamp(builder, compiler, target)
+        );
         builder.cargo(target_compiler, Mode::ToolRustc, target, "clean");
     }
 }
@@ -979,13 +1001,13 @@ impl Step for Assemble {
 
         // Link in all dylibs to the libdir
         let sysroot = builder.sysroot(target_compiler);
-        let sysroot_libdir = sysroot.join(libdir(&*host));
-        t!(fs::create_dir_all(&sysroot_libdir));
+        let rustc_libdir = builder.rustc_libdir(target_compiler);
+        t!(fs::create_dir_all(&rustc_libdir));
         let src_libdir = builder.sysroot_libdir(build_compiler, host);
         for f in builder.read_dir(&src_libdir) {
             let filename = f.file_name().into_string().unwrap();
             if is_dylib(&filename) {
-                builder.copy(&f.path(), &sysroot_libdir.join(&filename));
+                builder.copy(&f.path(), &rustc_libdir.join(&filename));
             }
         }
 
@@ -1015,10 +1037,20 @@ impl Step for Assemble {
 ///
 /// For a particular stage this will link the file listed in `stamp` into the
 /// `sysroot_dst` provided.
-pub fn add_to_sysroot(builder: &Builder<'_>, sysroot_dst: &Path, stamp: &Path) {
+pub fn add_to_sysroot(
+    builder: &Builder<'_>,
+    sysroot_dst: &Path,
+    sysroot_host_dst: &Path,
+    stamp: &Path
+) {
     t!(fs::create_dir_all(&sysroot_dst));
-    for path in builder.read_stamp_file(stamp) {
-        builder.copy(&path, &sysroot_dst.join(path.file_name().unwrap()));
+    t!(fs::create_dir_all(&sysroot_host_dst));
+    for (path, host) in builder.read_stamp_file(stamp) {
+        if host {
+            builder.copy(&path, &sysroot_host_dst.join(path.file_name().unwrap()));
+        } else {
+            builder.copy(&path, &sysroot_dst.join(path.file_name().unwrap()));
+        }
     }
 }
 
@@ -1047,8 +1079,14 @@ pub fn run_cargo(builder: &Builder<'_>,
     let mut deps = Vec::new();
     let mut toplevel = Vec::new();
     let ok = stream_cargo(builder, cargo, &mut |msg| {
-        let filenames = match msg {
-            CargoMessage::CompilerArtifact { filenames, .. } => filenames,
+        let (filenames, crate_types) = match msg {
+            CargoMessage::CompilerArtifact {
+                filenames,
+                target: CargoTarget {
+                    crate_types,
+                },
+                ..
+            } => (filenames, crate_types),
             _ => return,
         };
         for filename in filenames {
@@ -1063,15 +1101,19 @@ pub fn run_cargo(builder: &Builder<'_>,
             let filename = Path::new(&*filename);
 
             // If this was an output file in the "host dir" we don't actually
-            // worry about it, it's not relevant for us.
+            // worry about it, it's not relevant for us
             if filename.starts_with(&host_root_dir) {
+                // Unless it's a proc macro used in the compiler
+                if crate_types.iter().any(|t| t == "proc-macro") {
+                    deps.push((filename.to_path_buf(), true));
+                }
                 continue;
             }
 
             // If this was output in the `deps` dir then this is a precise file
             // name (hash included) so we start tracking it.
             if filename.starts_with(&target_deps_dir) {
-                deps.push(filename.to_path_buf());
+                deps.push((filename.to_path_buf(), false));
                 continue;
             }
 
@@ -1124,10 +1166,10 @@ pub fn run_cargo(builder: &Builder<'_>,
             let candidate = format!("{}.lib", path_to_add);
             let candidate = PathBuf::from(candidate);
             if candidate.exists() {
-                deps.push(candidate);
+                deps.push((candidate, false));
             }
         }
-        deps.push(path_to_add.into());
+        deps.push((path_to_add.into(), false));
     }
 
     // Now we want to update the contents of the stamp file, if necessary. First
@@ -1140,12 +1182,13 @@ pub fn run_cargo(builder: &Builder<'_>,
     let mut new_contents = Vec::new();
     let mut max = None;
     let mut max_path = None;
-    for dep in deps.iter() {
+    for (dep, proc_macro) in deps.iter() {
         let mtime = mtime(dep);
         if Some(mtime) > max {
             max = Some(mtime);
             max_path = Some(dep.clone());
         }
+        new_contents.extend(if *proc_macro { b"h" } else { b"t" });
         new_contents.extend(dep.to_str().unwrap().as_bytes());
         new_contents.extend(b"\0");
     }
@@ -1157,7 +1200,7 @@ pub fn run_cargo(builder: &Builder<'_>,
     if contents_equal && max <= stamp_mtime {
         builder.verbose(&format!("not updating {:?}; contents equal and {:?} <= {:?}",
                 stamp, max, stamp_mtime));
-        return deps
+        return deps.into_iter().map(|(d, _)| d).collect()
     }
     if max > stamp_mtime {
         builder.verbose(&format!("updating {:?} as {:?} changed", stamp, max_path));
@@ -1165,7 +1208,7 @@ pub fn run_cargo(builder: &Builder<'_>,
         builder.verbose(&format!("updating {:?} as deps changed", stamp));
     }
     t!(fs::write(&stamp, &new_contents));
-    deps
+    deps.into_iter().map(|(d, _)| d).collect()
 }
 
 pub fn stream_cargo(
@@ -1212,12 +1255,18 @@ pub fn stream_cargo(
 }
 
 #[derive(Deserialize)]
+pub struct CargoTarget<'a> {
+    crate_types: Vec<Cow<'a, str>>,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "reason", rename_all = "kebab-case")]
 pub enum CargoMessage<'a> {
     CompilerArtifact {
         package_id: Cow<'a, str>,
         features: Vec<Cow<'a, str>>,
         filenames: Vec<Cow<'a, str>>,
+        target: CargoTarget<'a>,
     },
     BuildScriptExecuted {
         package_id: Cow<'a, str>,

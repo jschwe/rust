@@ -1,7 +1,7 @@
 use rustc::ty::{self, TyCtxt};
 use rustc::mir::*;
 use rustc::util::nodemap::FxHashMap;
-use rustc_data_structures::indexed_vec::{IndexVec};
+use rustc_data_structures::indexed_vec::{Idx, IndexVec};
 use smallvec::SmallVec;
 use syntax_pos::{Span};
 
@@ -12,54 +12,23 @@ use self::abs_domain::{AbstractElem, Lift};
 
 mod abs_domain;
 
-// This submodule holds some newtype'd Index wrappers that are using
-// NonZero to ensure that Option<Index> occupies only a single word.
-// They are in a submodule to impose privacy restrictions; namely, to
-// ensure that other code does not accidentally access `index.0`
-// (which is likely to yield a subtle off-by-one error).
-pub(crate) mod indexes {
-    use std::fmt;
-    use std::num::NonZeroUsize;
-    use rustc_data_structures::indexed_vec::Idx;
-
-    macro_rules! new_index {
-        ($Index:ident, $debug_name:expr) => {
-            #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-            pub struct $Index(NonZeroUsize);
-
-            impl Idx for $Index {
-                fn new(idx: usize) -> Self {
-                    $Index(NonZeroUsize::new(idx + 1).unwrap())
-                }
-                fn index(self) -> usize {
-                    self.0.get() - 1
-                }
-            }
-
-            impl fmt::Debug for $Index {
-                fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    write!(fmt, "{}{}", $debug_name, self.index())
-                }
-            }
-        }
+newtype_index! {
+    pub struct MovePathIndex {
+        DEBUG_FORMAT = "mp{}"
     }
-
-    /// Index into MovePathData.move_paths
-    new_index!(MovePathIndex, "mp");
-
-    /// Index into MoveData.moves.
-    new_index!(MoveOutIndex, "mo");
-
-    /// Index into MoveData.inits.
-    new_index!(InitIndex, "in");
-
-    /// Index into Borrows.locations
-    new_index!(BorrowIndex, "bw");
 }
 
-pub use self::indexes::MovePathIndex;
-pub use self::indexes::MoveOutIndex;
-pub use self::indexes::InitIndex;
+newtype_index! {
+    pub struct MoveOutIndex {
+        DEBUG_FORMAT = "mo{}"
+    }
+}
+
+newtype_index! {
+    pub struct InitIndex {
+        DEBUG_FORMAT = "in{}"
+    }
+}
 
 impl MoveOutIndex {
     pub fn move_path_index(&self, move_data: &MoveData<'_>) -> MovePathIndex {
@@ -136,7 +105,7 @@ pub struct MoveData<'tcx> {
     /// particular path being moved.)
     pub loc_map: LocationMap<SmallVec<[MoveOutIndex; 4]>>,
     pub path_map: IndexVec<MovePathIndex, SmallVec<[MoveOutIndex; 4]>>,
-    pub rev_lookup: MovePathLookup<'tcx>,
+    pub rev_lookup: MovePathLookup,
     pub inits: IndexVec<InitIndex, Init>,
     /// Each Location `l` is mapped to the Inits that are effects
     /// of executing the code at `l`.
@@ -246,7 +215,7 @@ impl Init {
 
 /// Tables mapping from a place to its MovePathIndex.
 #[derive(Debug)]
-pub struct MovePathLookup<'tcx> {
+pub struct MovePathLookup {
     locals: IndexVec<Local, MovePathIndex>,
 
     /// projections are made from a base-place and a projection
@@ -255,7 +224,7 @@ pub struct MovePathLookup<'tcx> {
     /// subsequent search so that it is solely relative to that
     /// base-place). For the remaining lookup, we map the projection
     /// elem to the associated MovePathIndex.
-    projections: FxHashMap<(MovePathIndex, AbstractElem<'tcx>), MovePathIndex>
+    projections: FxHashMap<(MovePathIndex, AbstractElem), MovePathIndex>
 }
 
 mod builder;
@@ -266,7 +235,7 @@ pub enum LookupResult {
     Parent(Option<MovePathIndex>)
 }
 
-impl<'tcx> MovePathLookup<'tcx> {
+impl MovePathLookup {
     // Unlike the builder `fn move_path_for` below, this lookup
     // alternative will *not* create a MovePath on the fly for an
     // unknown place, but will rather return the nearest available
@@ -274,7 +243,6 @@ impl<'tcx> MovePathLookup<'tcx> {
     pub fn find(&self, place: &Place<'tcx>) -> LookupResult {
         match *place {
             Place::Base(PlaceBase::Local(local)) => LookupResult::Exact(self.locals[local]),
-            Place::Base(PlaceBase::Promoted(_)) |
             Place::Base(PlaceBase::Static(..)) => LookupResult::Parent(None),
             Place::Projection(ref proj) => {
                 match self.find(&proj.base) {

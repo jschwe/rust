@@ -1,17 +1,18 @@
 use rustc::ty::{self, Ty, TypeAndMut};
 use rustc::ty::layout::{self, TyLayout, Size};
+use rustc::ty::adjustment::{PointerCast};
 use syntax::ast::{FloatTy, IntTy, UintTy};
 
 use rustc_apfloat::ieee::{Single, Double};
 use rustc::mir::interpret::{
-    Scalar, EvalResult, Pointer, PointerArithmetic, EvalErrorKind, truncate
+    Scalar, EvalResult, Pointer, PointerArithmetic, InterpError, truncate
 };
 use rustc::mir::CastKind;
 use rustc_apfloat::Float;
 
-use super::{EvalContext, Machine, PlaceTy, OpTy, ImmTy, Immediate};
+use super::{InterpretCx, Machine, PlaceTy, OpTy, ImmTy, Immediate};
 
-impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
+impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tcx, M> {
     fn type_is_fat_ptr(&self, ty: Ty<'tcx>) -> bool {
         match ty.sty {
             ty::RawPtr(ty::TypeAndMut { ty, .. }) |
@@ -29,11 +30,11 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
     ) -> EvalResult<'tcx> {
         use rustc::mir::CastKind::*;
         match kind {
-            Unsize => {
+            Pointer(PointerCast::Unsize) => {
                 self.unsize_into(src, dest)?;
             }
 
-            Misc | MutToConstPointer => {
+            Misc | Pointer(PointerCast::MutToConstPointer) => {
                 let src = self.read_immediate(src)?;
 
                 if self.type_is_fat_ptr(src.layout.ty) {
@@ -64,8 +65,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
                                     dest);
                             }
                         }
-                        layout::Variants::Tagged { .. } |
-                        layout::Variants::NicheFilling { .. } => {},
+                        layout::Variants::Multiple { .. } => {},
                     }
 
                     let dest_val = self.cast_scalar(src.to_scalar()?, src.layout, dest.layout)?;
@@ -73,7 +73,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
                 }
             }
 
-            ReifyFnPointer => {
+            Pointer(PointerCast::ReifyFnPointer) => {
                 // The src operand does not matter, just its type
                 match src.layout.ty.sty {
                     ty::FnDef(def_id, substs) => {
@@ -86,26 +86,26 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
                             self.param_env,
                             def_id,
                             substs,
-                        ).ok_or_else(|| EvalErrorKind::TooGeneric.into());
+                        ).ok_or_else(|| InterpError::TooGeneric.into());
                         let fn_ptr = self.memory.create_fn_alloc(instance?).with_default_tag();
                         self.write_scalar(Scalar::Ptr(fn_ptr.into()), dest)?;
                     }
-                    ref other => bug!("reify fn pointer on {:?}", other),
+                    _ => bug!("reify fn pointer on {:?}", src.layout.ty),
                 }
             }
 
-            UnsafeFnPointer => {
+            Pointer(PointerCast::UnsafeFnPointer) => {
                 let src = self.read_immediate(src)?;
                 match dest.layout.ty.sty {
                     ty::FnPtr(_) => {
                         // No change to value
                         self.write_immediate(*src, dest)?;
                     }
-                    ref other => bug!("fn to unsafe fn cast on {:?}", other),
+                    _ => bug!("fn to unsafe fn cast on {:?}", dest.layout.ty),
                 }
             }
 
-            ClosureFnPointer => {
+            Pointer(PointerCast::ClosureFnPointer(_)) => {
                 // The src operand does not matter, just its type
                 match src.layout.ty.sty {
                     ty::Closure(def_id, substs) => {
@@ -120,7 +120,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
                         let val = Immediate::Scalar(Scalar::Ptr(fn_ptr.into()).into());
                         self.write_immediate(val, dest)?;
                     }
-                    ref other => bug!("closure fn pointer on {:?}", other),
+                    _ => bug!("closure fn pointer on {:?}", src.layout.ty),
                 }
             }
         }

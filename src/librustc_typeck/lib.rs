@@ -64,7 +64,6 @@ This API is completely unstable and subject to change.
 #![feature(crate_visibility_modifier)]
 #![feature(exhaustive_patterns)]
 #![feature(nll)]
-#![feature(refcell_replace_swap)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(slice_patterns)]
 #![feature(never_type)]
@@ -72,6 +71,7 @@ This API is completely unstable and subject to change.
 #![recursion_limit="256"]
 
 #![deny(rust_2018_idioms)]
+#![deny(internal)]
 #![allow(explicit_outlives_requirements)]
 
 #[macro_use] extern crate log;
@@ -81,14 +81,14 @@ This API is completely unstable and subject to change.
 
 // N.B., this module needs to be declared first so diagnostics are
 // registered before they are used.
-mod diagnostics;
+mod error_codes;
 
 mod astconv;
 mod check;
 mod check_unused;
 mod coherence;
 mod collect;
-mod constrained_type_params;
+mod constrained_generic_params;
 mod structured_errors;
 mod impl_wf_check;
 mod namespace;
@@ -109,11 +109,12 @@ use rustc::ty::subst::SubstsRef;
 use rustc::ty::{self, Ty, TyCtxt};
 use rustc::ty::query::Providers;
 use rustc::util;
-use rustc::util::profiling::ProfileCategory;
 use syntax_pos::Span;
 use util::common::time;
 
 use std::iter;
+
+pub use collect::checked_type_of;
 
 pub struct TypeAndSubsts<'tcx> {
     substs: SubstsRef<'tcx>,
@@ -317,13 +318,16 @@ pub fn provide(providers: &mut Providers<'_>) {
 pub fn check_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>)
                              -> Result<(), ErrorReported>
 {
-    tcx.sess.profiler(|p| p.start_activity(ProfileCategory::TypeChecking));
+    tcx.sess.profiler(|p| p.start_activity("type-check crate"));
 
     // this ensures that later parts of type checking can assume that items
     // have valid types and not error
     tcx.sess.track_errors(|| {
-        time(tcx.sess, "type collecting", ||
-             collect::collect_item_types(tcx));
+        time(tcx.sess, "type collecting", || {
+            for &module in tcx.hir().krate().modules.keys() {
+                tcx.ensure().collect_mod_item_types(tcx.hir().local_def_id(module));
+            }
+        });
     })?;
 
     if tcx.features().rustc_attrs {
@@ -352,14 +356,18 @@ pub fn check_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>)
 
     time(tcx.sess, "wf checking", || check::check_wf_new(tcx))?;
 
-    time(tcx.sess, "item-types checking", || check::check_item_types(tcx))?;
+    time(tcx.sess, "item-types checking", || {
+        for &module in tcx.hir().krate().modules.keys() {
+            tcx.ensure().check_mod_item_types(tcx.hir().local_def_id(module));
+        }
+    });
 
-    time(tcx.sess, "item-bodies checking", || check::check_item_bodies(tcx))?;
+    time(tcx.sess, "item-bodies checking", || tcx.typeck_item_bodies(LOCAL_CRATE));
 
     check_unused::check_crate(tcx);
     check_for_entry_fn(tcx);
 
-    tcx.sess.profiler(|p| p.end_activity(ProfileCategory::TypeChecking));
+    tcx.sess.profiler(|p| p.end_activity("type-check crate"));
 
     if tcx.sess.err_count() == 0 {
         Ok(())
@@ -368,7 +376,7 @@ pub fn check_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>)
     }
 }
 
-/// A quasi-deprecated helper used in rustdoc and save-analysis to get
+/// A quasi-deprecated helper used in rustdoc and clippy to get
 /// the type from a HIR node.
 pub fn hir_ty_to_ty<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, hir_ty: &hir::Ty) -> Ty<'tcx> {
     // In case there are any projections etc, find the "environment"

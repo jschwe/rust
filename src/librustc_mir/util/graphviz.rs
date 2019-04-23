@@ -1,6 +1,7 @@
 use rustc::hir::def_id::DefId;
 use rustc::mir::*;
 use rustc::ty::TyCtxt;
+use rustc_data_structures::indexed_vec::Idx;
 use std::fmt::Debug;
 use std::io::{self, Write};
 
@@ -20,6 +21,17 @@ pub fn write_mir_graphviz<'tcx, W>(tcx: TyCtxt<'_, '_, 'tcx>,
     Ok(())
 }
 
+// Must match `[0-9A-Za-z_]*`. This does not appear in the rendered graph, so
+// it does not have to be user friendly.
+pub fn graphviz_safe_def_name(def_id: DefId) -> String {
+    format!(
+        "{}_{}_{}",
+        def_id.krate.index(),
+        def_id.index.address_space().index(),
+        def_id.index.as_array_index(),
+    )
+}
+
 /// Write a graphviz DOT graph of the MIR.
 pub fn write_mir_fn_graphviz<'tcx, W>(tcx: TyCtxt<'_, '_, 'tcx>,
                                       def_id: DefId,
@@ -27,7 +39,7 @@ pub fn write_mir_fn_graphviz<'tcx, W>(tcx: TyCtxt<'_, '_, 'tcx>,
                                       w: &mut W) -> io::Result<()>
     where W: Write
 {
-    writeln!(w, "digraph Mir_{} {{", tcx.hir().as_local_node_id(def_id).unwrap())?;
+    writeln!(w, "digraph Mir_{} {{", graphviz_safe_def_name(def_id))?;
 
     // Global graph properties
     writeln!(w, r#"    graph [fontname="monospace"];"#)?;
@@ -127,7 +139,7 @@ fn write_graph_label<'a, 'gcx, 'tcx, W: Write>(tcx: TyCtxt<'a, 'gcx, 'tcx>,
                                                mir: &Mir<'_>,
                                                w: &mut W)
                                                -> io::Result<()> {
-    write!(w, "    label=<fn {}(", dot::escape_html(&tcx.item_path_str(def_id)))?;
+    write!(w, "    label=<fn {}(", dot::escape_html(&tcx.def_path_str(def_id)))?;
 
     // fn argument types.
     for (i, arg) in mir.args_iter().enumerate() {
@@ -141,7 +153,7 @@ fn write_graph_label<'a, 'gcx, 'tcx, W: Write>(tcx: TyCtxt<'a, 'gcx, 'tcx>,
         )?;
     }
 
-    write!(w, ") -&gt; {}", escape(mir.return_ty()))?;
+    write!(w, ") -&gt; {}", escape(&mir.return_ty()))?;
     write!(w, r#"<br align="left"/>"#)?;
 
     for local in mir.vars_and_temps_iter() {

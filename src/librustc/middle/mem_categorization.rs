@@ -62,9 +62,9 @@ use crate::middle::region;
 use crate::hir::def_id::{DefId, LocalDefId};
 use crate::hir::Node;
 use crate::infer::InferCtxt;
-use crate::hir::def::{Def, CtorKind};
+use crate::hir::def::{CtorOf, Def, CtorKind};
 use crate::ty::adjustment;
-use crate::ty::{self, Ty, TyCtxt};
+use crate::ty::{self, DefIdTree, Ty, TyCtxt};
 use crate::ty::fold::TypeFoldable;
 use crate::ty::layout::VariantIdx;
 
@@ -619,12 +619,8 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
             }
 
             adjustment::Adjust::NeverToAny |
-            adjustment::Adjust::ReifyFnPointer |
-            adjustment::Adjust::UnsafeFnPointer |
-            adjustment::Adjust::ClosureFnPointer |
-            adjustment::Adjust::MutToConstPointer |
-            adjustment::Adjust::Borrow(_) |
-            adjustment::Adjust::Unsize => {
+            adjustment::Adjust::Pointer(_) |
+            adjustment::Adjust::Borrow(_) => {
                 // Result is an rvalue.
                 Ok(self.cat_rvalue_node(expr.hir_id, expr.span, target))
             }
@@ -704,12 +700,12 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                hir_id, expr_ty, def);
 
         match def {
-            Def::StructCtor(..) | Def::VariantCtor(..) | Def::Const(..) | Def::ConstParam(..) |
+            Def::Ctor(..) | Def::Const(..) | Def::ConstParam(..) |
             Def::AssociatedConst(..) | Def::Fn(..) | Def::Method(..) | Def::SelfCtor(..) => {
                 Ok(self.cat_rvalue_node(hir_id, span, expr_ty))
             }
 
-            Def::Static(def_id, mutbl) => {
+            Def::Static(def_id) => {
                 // `#[thread_local]` statics may not outlive the current function, but
                 // they also cannot be moved out of.
                 let is_thread_local = self.tcx.get_attrs(def_id)[..]
@@ -727,22 +723,27 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                     hir_id,
                     span,
                     cat,
-                    mutbl: if mutbl { McDeclared } else { McImmutable},
+                    mutbl: match self.tcx.static_mutability(def_id).unwrap() {
+                        hir::MutImmutable => McImmutable,
+                        hir::MutMutable => McDeclared,
+                    },
                     ty:expr_ty,
                     note: NoteNone
                 })
             }
 
             Def::Upvar(var_id, _, fn_node_id) => {
-                self.cat_upvar(hir_id, span, var_id, fn_node_id)
+                let var_nid = self.tcx.hir().hir_to_node_id(var_id);
+                self.cat_upvar(hir_id, span, var_nid, fn_node_id)
             }
 
             Def::Local(vid) => {
+                let vnid = self.tcx.hir().hir_to_node_id(vid);
                 Ok(cmt_ {
                     hir_id,
                     span,
-                    cat: Categorization::Local(self.tcx.hir().node_to_hir_id(vid)),
-                    mutbl: MutabilityCategory::from_local(self.tcx, self.tables, vid),
+                    cat: Categorization::Local(vid),
+                    mutbl: MutabilityCategory::from_local(self.tcx, self.tables, vnid),
                     ty: expr_ty,
                     note: NoteNone
                 })
@@ -786,7 +787,8 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
         // FnMut          | copied -> &'env mut  | upvar -> &'env mut -> &'up bk
         // FnOnce         | copied               | upvar -> &'up bk
 
-        let kind = match self.node_ty(fn_hir_id)?.sty {
+        let ty = self.node_ty(fn_hir_id)?;
+        let kind = match ty.sty {
             ty::Generator(..) => ty::ClosureKind::FnOnce,
             ty::Closure(closure_def_id, closure_substs) => {
                 match self.infcx {
@@ -803,7 +805,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                                 .closure_kind(closure_def_id, self.tcx.global_tcx()),
                 }
             }
-            ref t => span_bug!(span, "unexpected type for fn in mem_categorization: {:?}", t),
+            _ => span_bug!(span, "unexpected type for fn in mem_categorization: {:?}", ty),
         };
 
         let closure_expr_def_id = self.tcx.hir().local_def_id(fn_node_id);
@@ -1064,7 +1066,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                 let bk = ty::BorrowKind::from_mutbl(mutbl);
                 BorrowedPtr(bk, r)
             }
-            ref ty => bug!("unexpected type in cat_deref: {:?}", ty)
+            _ => bug!("unexpected type in cat_deref: {:?}", base_cmt.ty)
         };
         let ret = cmt_ {
             hir_id: node.hir_id(),
@@ -1132,7 +1134,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                                              variant_did: DefId)
                                              -> cmt<'tcx> {
         // univariant enums do not need downcasts
-        let base_did = self.tcx.parent_def_id(variant_did).unwrap();
+        let base_did = self.tcx.parent(variant_did).unwrap();
         if self.tcx.adt_def(base_did).variants.len() != 1 {
             let base_ty = base_cmt.ty;
             let ret = Rc::new(cmt_ {
@@ -1273,17 +1275,20 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                         debug!("access to unresolvable pattern {:?}", pat);
                         return Err(())
                     }
-                    Def::VariantCtor(def_id, CtorKind::Fn) => {
-                        let enum_def = self.tcx.parent_def_id(def_id).unwrap();
-                        (self.cat_downcast_if_needed(pat, cmt, def_id),
-                        self.tcx.adt_def(enum_def).variant_with_id(def_id).fields.len())
+                    Def::Ctor(variant_ctor_did, CtorOf::Variant, CtorKind::Fn) => {
+                        let variant_did = self.tcx.parent(variant_ctor_did).unwrap();
+                        let enum_did = self.tcx.parent(variant_did).unwrap();
+                        (self.cat_downcast_if_needed(pat, cmt, variant_did),
+                         self.tcx.adt_def(enum_did)
+                             .variant_with_ctor_id(variant_ctor_did).fields.len())
                     }
-                    Def::StructCtor(_, CtorKind::Fn) | Def::SelfCtor(..) => {
-                        match self.pat_ty_unadjusted(&pat)?.sty {
+                    Def::Ctor(_, CtorOf::Struct, CtorKind::Fn) | Def::SelfCtor(..) => {
+                        let ty = self.pat_ty_unadjusted(&pat)?;
+                        match ty.sty {
                             ty::Adt(adt_def, _) => {
                                 (cmt, adt_def.non_enum_variant().fields.len())
                             }
-                            ref ty => {
+                            _ => {
                                 span_bug!(pat.span,
                                           "tuple struct pattern unexpected type {:?}", ty);
                             }
@@ -1312,8 +1317,11 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                         debug!("access to unresolvable pattern {:?}", pat);
                         return Err(())
                     }
-                    Def::Variant(variant_did) |
-                    Def::VariantCtor(variant_did, ..) => {
+                    Def::Ctor(variant_ctor_did, CtorOf::Variant, _) => {
+                        let variant_did = self.tcx.parent(variant_ctor_did).unwrap();
+                        self.cat_downcast_if_needed(pat, cmt, variant_did)
+                    }
+                    Def::Variant(variant_did) => {
                         self.cat_downcast_if_needed(pat, cmt, variant_did)
                     }
                     _ => cmt,
@@ -1334,9 +1342,10 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
 
             PatKind::Tuple(ref subpats, ddpos) => {
                 // (p1, ..., pN)
-                let expected_len = match self.pat_ty_unadjusted(&pat)?.sty {
+                let ty = self.pat_ty_unadjusted(&pat)?;
+                let expected_len = match ty.sty {
                     ty::Tuple(ref tys) => tys.len(),
-                    ref ty => span_bug!(pat.span, "tuple pattern unexpected type {:?}", ty),
+                    _ => span_bug!(pat.span, "tuple pattern unexpected type {:?}", ty),
                 };
                 for (i, subpat) in subpats.iter().enumerate_and_adjust(expected_len, ddpos) {
                     let subpat_ty = self.pat_ty_adjusted(&subpat)?; // see (*2)

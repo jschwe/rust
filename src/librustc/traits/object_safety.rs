@@ -133,7 +133,7 @@ impl<'a, 'tcx> TyCtxt<'a, 'tcx, 'tcx> {
                         hir::CRATE_HIR_ID,
                         *span,
                         &format!("the trait `{}` cannot be made into an object",
-                                 self.item_path_str(trait_def_id)),
+                                 self.def_path_str(trait_def_id)),
                         &violation.error_msg());
                     false
                 } else {
@@ -310,7 +310,8 @@ impl<'a, 'tcx> TyCtxt<'a, 'tcx, 'tcx> {
         }
 
         // We can't monomorphize things like `fn foo<A>(...)`.
-        if self.generics_of(method.def_id).own_counts().types != 0 {
+        let own_counts = self.generics_of(method.def_id).own_counts();
+        if own_counts.types + own_counts.consts != 0 {
             return Some(MethodViolationCode::Generic);
         }
 

@@ -53,10 +53,7 @@ impl<'a, 'tcx> VarianceTest<'a, 'tcx> {
                 // The `..` are the names of fields to dump.
                 let meta_items = attr.meta_item_list().unwrap_or_default();
                 for meta_item in meta_items {
-                    let name = meta_item.word().map(|mi| mi.name().as_str());
-                    let name = name.as_ref().map(|s| &s[..]).unwrap_or("");
-
-                    match name {
+                    match meta_item.name_or_empty().get() {
                         "abi" => {
                             self.tcx
                                 .sess
@@ -86,9 +83,9 @@ impl<'a, 'tcx> VarianceTest<'a, 'tcx> {
                             );
                         }
 
-                        _ => {
+                        name => {
                             self.tcx.sess.span_err(
-                                meta_item.span,
+                                meta_item.span(),
                                 &format!("unrecognized field name `{}`", name),
                             );
                         }

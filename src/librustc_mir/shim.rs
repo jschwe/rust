@@ -2,7 +2,7 @@ use rustc::hir;
 use rustc::hir::def_id::DefId;
 use rustc::infer;
 use rustc::mir::*;
-use rustc::ty::{self, Ty, TyCtxt, GenericParamDefKind};
+use rustc::ty::{self, Ty, TyCtxt};
 use rustc::ty::layout::VariantIdx;
 use rustc::ty::subst::{Subst, InternalSubsts};
 use rustc::ty::query::Providers;
@@ -450,12 +450,7 @@ impl<'a, 'tcx> CloneShimBuilder<'a, 'tcx> {
     ) {
         let tcx = self.tcx;
 
-        let substs = InternalSubsts::for_item(tcx, self.def_id, |param, _| {
-            match param.kind {
-                GenericParamDefKind::Lifetime => tcx.types.re_erased.into(),
-                GenericParamDefKind::Type {..} => ty.into(),
-            }
-        });
+        let substs = tcx.mk_substs_trait(ty, &[]);
 
         // `func == Clone::clone(&ty) -> ty`
         let func_ty = tcx.mk_fn_def(self.def_id, substs);
@@ -463,9 +458,9 @@ impl<'a, 'tcx> CloneShimBuilder<'a, 'tcx> {
             span: self.span,
             ty: func_ty,
             user_ty: None,
-            literal: tcx.mk_lazy_const(ty::LazyConst::Evaluated(
+            literal: tcx.mk_const(
                 ty::Const::zero_sized(func_ty),
-            )),
+            ),
         });
 
         let ref_loc = self.make_place(
@@ -525,9 +520,9 @@ impl<'a, 'tcx> CloneShimBuilder<'a, 'tcx> {
             span: self.span,
             ty: self.tcx.types.usize,
             user_ty: None,
-            literal: self.tcx.mk_lazy_const(ty::LazyConst::Evaluated(
+            literal: self.tcx.mk_const(
                 ty::Const::from_usize(self.tcx, value),
-            )),
+            ),
         }
     }
 
@@ -767,9 +762,9 @@ fn build_call_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 span,
                 ty,
                 user_ty: None,
-                literal: tcx.mk_lazy_const(ty::LazyConst::Evaluated(
+                literal: tcx.mk_const(
                     ty::Const::zero_sized(ty)
-                )),
+                ),
              }),
              vec![rcvr])
         }
@@ -885,7 +880,7 @@ pub fn build_adt_ctor<'a, 'gcx, 'tcx>(infcx: &infer::InferCtxt<'a, 'gcx, 'tcx>,
     };
 
     let variant_no = if adt_def.is_enum() {
-        adt_def.variant_index_with_id(def_id)
+        adt_def.variant_index_with_ctor_id(def_id)
     } else {
         VariantIdx::new(0)
     };

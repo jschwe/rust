@@ -3,6 +3,7 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![deny(rust_2018_idioms)]
+#![deny(internal)]
 
 #![feature(in_band_lifetimes)]
 #![feature(proc_macro_diagnostic)]
@@ -16,7 +17,7 @@
 
 extern crate proc_macro;
 
-mod diagnostics;
+mod error_codes;
 
 mod asm;
 mod assert;

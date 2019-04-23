@@ -7,11 +7,11 @@ use std::hash::Hash;
 
 use rustc::hir::{self, def_id::DefId};
 use rustc::mir;
-use rustc::ty::{self, query::TyCtxtAt};
+use rustc::ty::{self, query::TyCtxtAt, layout::Size};
 
 use super::{
     Allocation, AllocId, EvalResult, Scalar, AllocationExtra,
-    EvalContext, PlaceTy, MPlaceTy, OpTy, ImmTy, Pointer, MemoryKind,
+    InterpretCx, PlaceTy, MPlaceTy, OpTy, ImmTy, MemoryKind,
 };
 
 /// Whether this kind of memory is allowed to leak
@@ -76,7 +76,7 @@ pub trait Machine<'a, 'mir, 'tcx>: Sized {
     type MemoryExtra: Default;
 
     /// Extra data stored in every allocation.
-    type AllocExtra: AllocationExtra<Self::PointerTag, Self::MemoryExtra> + 'static;
+    type AllocExtra: AllocationExtra<Self::PointerTag> + 'static;
 
     /// Memory's allocation map
     type MemoryMap:
@@ -95,11 +95,11 @@ pub trait Machine<'a, 'mir, 'tcx>: Sized {
     const STATIC_KIND: Option<Self::MemoryKinds>;
 
     /// Whether to enforce the validity invariant
-    fn enforce_validity(ecx: &EvalContext<'a, 'mir, 'tcx, Self>) -> bool;
+    fn enforce_validity(ecx: &InterpretCx<'a, 'mir, 'tcx, Self>) -> bool;
 
     /// Called before a basic block terminator is executed.
     /// You can use this to detect endlessly running programs.
-    fn before_terminator(ecx: &mut EvalContext<'a, 'mir, 'tcx, Self>) -> EvalResult<'tcx>;
+    fn before_terminator(ecx: &mut InterpretCx<'a, 'mir, 'tcx, Self>) -> EvalResult<'tcx>;
 
     /// Entry point to all function calls.
     ///
@@ -112,7 +112,7 @@ pub trait Machine<'a, 'mir, 'tcx>: Sized {
     /// Passing `dest`and `ret` in the same `Option` proved very annoying when only one of them
     /// was used.
     fn find_fn(
-        ecx: &mut EvalContext<'a, 'mir, 'tcx, Self>,
+        ecx: &mut InterpretCx<'a, 'mir, 'tcx, Self>,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx, Self::PointerTag>],
         dest: Option<PlaceTy<'tcx, Self::PointerTag>>,
@@ -122,7 +122,7 @@ pub trait Machine<'a, 'mir, 'tcx>: Sized {
     /// Directly process an intrinsic without pushing a stack frame.
     /// If this returns successfully, the engine will take care of jumping to the next block.
     fn call_intrinsic(
-        ecx: &mut EvalContext<'a, 'mir, 'tcx, Self>,
+        ecx: &mut InterpretCx<'a, 'mir, 'tcx, Self>,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx, Self::PointerTag>],
         dest: PlaceTy<'tcx, Self::PointerTag>,
@@ -139,6 +139,23 @@ pub trait Machine<'a, 'mir, 'tcx>: Sized {
         memory_extra: &Self::MemoryExtra,
     ) -> EvalResult<'tcx, Cow<'tcx, Allocation<Self::PointerTag, Self::AllocExtra>>>;
 
+    /// Called for all binary operations on integer(-like) types when one operand is a pointer
+    /// value, and for the `Offset` operation that is inherently about pointers.
+    ///
+    /// Returns a (value, overflowed) pair if the operation succeeded
+    fn ptr_op(
+        ecx: &InterpretCx<'a, 'mir, 'tcx, Self>,
+        bin_op: mir::BinOp,
+        left: ImmTy<'tcx, Self::PointerTag>,
+        right: ImmTy<'tcx, Self::PointerTag>,
+    ) -> EvalResult<'tcx, (Scalar<Self::PointerTag>, bool)>;
+
+    /// Heap allocations via the `box` keyword.
+    fn box_alloc(
+        ecx: &mut InterpretCx<'a, 'mir, 'tcx, Self>,
+        dest: PlaceTy<'tcx, Self::PointerTag>,
+    ) -> EvalResult<'tcx>;
+
     /// Called to turn an allocation obtained from the `tcx` into one that has
     /// the right type for this machine.
     ///
@@ -151,36 +168,19 @@ pub trait Machine<'a, 'mir, 'tcx>: Sized {
         memory_extra: &Self::MemoryExtra,
     ) -> Cow<'b, Allocation<Self::PointerTag, Self::AllocExtra>>;
 
-    /// Called for all binary operations on integer(-like) types when one operand is a pointer
-    /// value, and for the `Offset` operation that is inherently about pointers.
-    ///
-    /// Returns a (value, overflowed) pair if the operation succeeded
-    fn ptr_op(
-        ecx: &EvalContext<'a, 'mir, 'tcx, Self>,
-        bin_op: mir::BinOp,
-        left: ImmTy<'tcx, Self::PointerTag>,
-        right: ImmTy<'tcx, Self::PointerTag>,
-    ) -> EvalResult<'tcx, (Scalar<Self::PointerTag>, bool)>;
-
-    /// Heap allocations via the `box` keyword.
-    fn box_alloc(
-        ecx: &mut EvalContext<'a, 'mir, 'tcx, Self>,
-        dest: PlaceTy<'tcx, Self::PointerTag>,
-    ) -> EvalResult<'tcx>;
-
-    /// Adds the tag for a newly allocated pointer.
-    fn tag_new_allocation(
-        ecx: &mut EvalContext<'a, 'mir, 'tcx, Self>,
-        ptr: Pointer,
+    /// Computes the extra state and the tag for a new allocation.
+    fn new_allocation(
+        size: Size,
+        extra: &Self::MemoryExtra,
         kind: MemoryKind<Self::MemoryKinds>,
-    ) -> Pointer<Self::PointerTag>;
+    ) -> (Self::AllocExtra, Self::PointerTag);
 
     /// Executed when evaluating the `*` operator: Following a reference.
     /// This has the chance to adjust the tag. It should not change anything else!
     /// `mutability` can be `None` in case a raw ptr is being dereferenced.
     #[inline]
     fn tag_dereference(
-        _ecx: &EvalContext<'a, 'mir, 'tcx, Self>,
+        _ecx: &InterpretCx<'a, 'mir, 'tcx, Self>,
         place: MPlaceTy<'tcx, Self::PointerTag>,
         _mutability: Option<hir::Mutability>,
     ) -> EvalResult<'tcx, Scalar<Self::PointerTag>> {
@@ -190,7 +190,7 @@ pub trait Machine<'a, 'mir, 'tcx>: Sized {
     /// Executes a retagging operation
     #[inline]
     fn retag(
-        _ecx: &mut EvalContext<'a, 'mir, 'tcx, Self>,
+        _ecx: &mut InterpretCx<'a, 'mir, 'tcx, Self>,
         _kind: mir::RetagKind,
         _place: PlaceTy<'tcx, Self::PointerTag>,
     ) -> EvalResult<'tcx> {
@@ -199,12 +199,12 @@ pub trait Machine<'a, 'mir, 'tcx>: Sized {
 
     /// Called immediately before a new stack frame got pushed
     fn stack_push(
-        ecx: &mut EvalContext<'a, 'mir, 'tcx, Self>,
+        ecx: &mut InterpretCx<'a, 'mir, 'tcx, Self>,
     ) -> EvalResult<'tcx, Self::FrameExtra>;
 
     /// Called immediately after a stack frame gets popped
     fn stack_pop(
-        ecx: &mut EvalContext<'a, 'mir, 'tcx, Self>,
+        ecx: &mut InterpretCx<'a, 'mir, 'tcx, Self>,
         extra: Self::FrameExtra,
     ) -> EvalResult<'tcx>;
 }

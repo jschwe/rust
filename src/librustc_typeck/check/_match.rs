@@ -88,7 +88,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             // See the examples in `run-pass/match-defbm*.rs`.
             let mut pat_adjustments = vec![];
             while let ty::Ref(_, inner_ty, inner_mutability) = exp_ty.sty {
-                debug!("inspecting {:?} with type {:?}", exp_ty, exp_ty.sty);
+                debug!("inspecting {:?}", exp_ty);
 
                 debug!("current discriminant is Ref, inserting implicit deref");
                 // Preserve the reference type. We'll need it later during HAIR lowering.
@@ -227,7 +227,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 self.demand_eqtype_pat(pat.span, expected, rhs_ty, match_discrim_span);
                 common_type
             }
-            PatKind::Binding(ba, _, var_id, _, ref sub) => {
+            PatKind::Binding(ba, var_id, _, ref sub) => {
                 let bm = if ba == hir::BindingAnnotation::Unannotated {
                     def_bm
                 } else {
@@ -732,6 +732,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                         source: match_src,
                         prior_arms: other_arms.clone(),
                         last_ty: prior_arm_ty.unwrap(),
+                        discrim_hir_id: discrim.hir_id,
                     })
                 };
                 coercion.coerce(self, &cause, &arm.body, arm_ty);
@@ -807,14 +808,12 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                 report_unexpected_variant_def(tcx, &def, pat.span, qpath);
                 return tcx.types.err;
             }
-            Def::VariantCtor(_, CtorKind::Fictive) |
-            Def::VariantCtor(_, CtorKind::Fn) => {
+            Def::Ctor(_, _, CtorKind::Fictive) |
+            Def::Ctor(_, _, CtorKind::Fn) => {
                 report_unexpected_variant_def(tcx, &def, pat.span, qpath);
                 return tcx.types.err;
             }
-            Def::VariantCtor(_, CtorKind::Const) |
-            Def::StructCtor(_, CtorKind::Const) |
-            Def::SelfCtor(..) |
+            Def::Ctor(_, _, CtorKind::Const) | Def::SelfCtor(..) |
             Def::Const(..) | Def::AssociatedConst(..) => {} // OK
             _ => bug!("unexpected pattern definition: {:?}", def)
         }
@@ -876,8 +875,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                 report_unexpected_def(def);
                 return tcx.types.err;
             }
-            Def::VariantCtor(_, CtorKind::Fn) |
-            Def::StructCtor(_, CtorKind::Fn) => {
+            Def::Ctor(_, _, CtorKind::Fn) => {
                 tcx.expect_variant_def(def)
             }
             _ => bug!("unexpected pattern definition: {:?}", def)
@@ -894,7 +892,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                 subpats.len() < variant.fields.len() && ddpos.is_some() {
             let substs = match pat_ty.sty {
                 ty::Adt(_, substs) => substs,
-                ref ty => bug!("unexpected pattern type {:?}", ty),
+                _ => bug!("unexpected pattern type {:?}", pat_ty),
             };
             for (i, subpat) in subpats.iter().enumerate_and_adjust(variant.fields.len(), ddpos) {
                 let field_ty = self.field_ty(subpat.span, &variant.fields[i], substs);
@@ -918,14 +916,16 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
         pat_ty
     }
 
-    fn check_struct_pat_fields(&self,
-                               adt_ty: Ty<'tcx>,
-                               pat_id: hir::HirId,
-                               span: Span,
-                               variant: &'tcx ty::VariantDef,
-                               fields: &'gcx [Spanned<hir::FieldPat>],
-                               etc: bool,
-                               def_bm: ty::BindingMode) -> bool {
+    fn check_struct_pat_fields(
+        &self,
+        adt_ty: Ty<'tcx>,
+        pat_id: hir::HirId,
+        span: Span,
+        variant: &'tcx ty::VariantDef,
+        fields: &'gcx [Spanned<hir::FieldPat>],
+        etc: bool,
+        def_bm: ty::BindingMode,
+    ) -> bool {
         let tcx = self.tcx;
 
         let (substs, adt) = match adt_ty.sty {
@@ -948,7 +948,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
         let mut inexistent_fields = vec![];
         // Typecheck each field.
         for &Spanned { node: ref field, span } in fields {
-            let ident = tcx.adjust_ident(field.ident, variant.did, self.body_id).0;
+            let ident = tcx.adjust_ident(field.ident, variant.def_id, self.body_id).0;
             let field_ty = match used_fields.entry(ident) {
                 Occupied(occupied) => {
                     struct_span_err!(tcx.sess, span, E0025,
@@ -971,7 +971,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                             self.field_ty(span, f, substs)
                         })
                         .unwrap_or_else(|| {
-                            inexistent_fields.push((span, field.ident));
+                            inexistent_fields.push(field.ident);
                             no_field_errors = false;
                             tcx.types.err
                         })
@@ -985,29 +985,29 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                 .map(|field| field.ident.modern())
                 .filter(|ident| !used_fields.contains_key(&ident))
                 .collect::<Vec<_>>();
-        if inexistent_fields.len() > 0 {
+        if inexistent_fields.len() > 0 && !variant.recovered {
             let (field_names, t, plural) = if inexistent_fields.len() == 1 {
-                (format!("a field named `{}`", inexistent_fields[0].1), "this", "")
+                (format!("a field named `{}`", inexistent_fields[0]), "this", "")
             } else {
                 (format!("fields named {}",
                          inexistent_fields.iter()
-                            .map(|(_, name)| format!("`{}`", name))
+                            .map(|ident| format!("`{}`", ident))
                             .collect::<Vec<String>>()
                             .join(", ")), "these", "s")
             };
-            let spans = inexistent_fields.iter().map(|(span, _)| *span).collect::<Vec<_>>();
+            let spans = inexistent_fields.iter().map(|ident| ident.span).collect::<Vec<_>>();
             let mut err = struct_span_err!(tcx.sess,
                                            spans,
                                            E0026,
                                            "{} `{}` does not have {}",
                                            kind_name,
-                                           tcx.item_path_str(variant.did),
+                                           tcx.def_path_str(variant.def_id),
                                            field_names);
-            if let Some((span, ident)) = inexistent_fields.last() {
-                err.span_label(*span,
+            if let Some(ident) = inexistent_fields.last() {
+                err.span_label(ident.span,
                                format!("{} `{}` does not have {} field{}",
                                        kind_name,
-                                       tcx.item_path_str(variant.did),
+                                       tcx.def_path_str(variant.def_id),
                                        t,
                                        plural));
                 if plural == "" {
@@ -1016,8 +1016,8 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                         find_best_match_for_name(input, &ident.as_str(), None);
                     if let Some(suggested_name) = suggested_name {
                         err.span_suggestion(
-                            *span,
-                            "did you mean",
+                            ident.span,
+                            "a field with a similar name exists",
                             suggested_name.to_string(),
                             Applicability::MaybeIncorrect,
                         );

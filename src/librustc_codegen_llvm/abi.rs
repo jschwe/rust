@@ -266,7 +266,8 @@ impl ArgTypeExt<'ll, 'tcx> for ArgType<'tcx, Ty<'tcx>> {
                 OperandValue::Ref(next(), Some(next()), self.layout.align.abi).store(bx, dst);
             }
             PassMode::Direct(_) | PassMode::Indirect(_, None) | PassMode::Cast(_) => {
-                self.store(bx, next(), dst);
+                let next_arg = next();
+                self.store(bx, next_arg, dst);
             }
         }
     }
@@ -858,5 +859,9 @@ impl AbiBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
         callsite: Self::Value
     ) {
         ty.apply_attrs_callsite(self, callsite)
+    }
+
+    fn get_param(&self, index: usize) -> Self::Value {
+        llvm::get_param(self.llfn(), index as c_uint)
     }
 }

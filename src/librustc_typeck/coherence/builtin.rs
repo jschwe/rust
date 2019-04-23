@@ -37,7 +37,7 @@ impl<'a, 'tcx> Checker<'a, 'tcx> {
     {
         if Some(self.trait_def_id) == trait_def_id {
             for &impl_id in self.tcx.hir().trait_impls(self.trait_def_id) {
-                let impl_def_id = self.tcx.hir().local_def_id(impl_id);
+                let impl_def_id = self.tcx.hir().local_def_id_from_hir_id(impl_id);
                 f(self.tcx, impl_def_id);
             }
         }
@@ -50,8 +50,8 @@ fn visit_implementation_of_drop<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, impl_did:
         /* do nothing */
     } else {
         // Destructors only work on nominal types.
-        if let Some(impl_node_id) = tcx.hir().as_local_node_id(impl_did) {
-            if let Some(Node::Item(item)) = tcx.hir().find(impl_node_id) {
+        if let Some(impl_hir_id) = tcx.hir().as_local_hir_id(impl_did) {
+            if let Some(Node::Item(item)) = tcx.hir().find_by_hir_id(impl_hir_id) {
                 let span = match item.node {
                     ItemKind::Impl(.., ref ty, _) => ty.span,
                     _ => item.span,
@@ -198,8 +198,8 @@ fn visit_implementation_of_dispatch_from_dyn<'a, 'tcx>(
                     if def_a.is_struct() && def_b.is_struct() =>
                 {
                     if def_a != def_b {
-                        let source_path = tcx.item_path_str(def_a.did);
-                        let target_path = tcx.item_path_str(def_b.did);
+                        let source_path = tcx.def_path_str(def_a.did);
+                        let target_path = tcx.def_path_str(def_b.did);
 
                         create_err(
                             &format!(
@@ -388,8 +388,8 @@ pub fn coerce_unsized_info<'a, 'gcx>(gcx: TyCtxt<'a, 'gcx, 'gcx>,
             (&ty::Adt(def_a, substs_a), &ty::Adt(def_b, substs_b)) if def_a.is_struct() &&
                                                                       def_b.is_struct() => {
                 if def_a != def_b {
-                    let source_path = gcx.item_path_str(def_a.did);
-                    let target_path = gcx.item_path_str(def_b.did);
+                    let source_path = gcx.def_path_str(def_a.did);
+                    let target_path = gcx.def_path_str(def_b.did);
                     span_err!(gcx.sess,
                               span,
                               E0377,

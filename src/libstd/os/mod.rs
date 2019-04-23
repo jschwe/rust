@@ -50,6 +50,8 @@ cfg_if! {
 #[cfg(target_os = "solaris")]    pub mod solaris;
 #[cfg(target_os = "emscripten")] pub mod emscripten;
 #[cfg(target_os = "fuchsia")]    pub mod fuchsia;
+#[cfg(target_os = "hermit")]     pub mod hermit;
+#[cfg(target_env = "wasi")]      pub mod wasi;
 #[cfg(all(target_vendor = "fortanix", target_env = "sgx"))] pub mod fortanix_sgx;
 
 pub mod raw;

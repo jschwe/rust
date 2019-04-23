@@ -72,8 +72,10 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
         let param_env = self.tcx.param_env(self.source.def_id());
 
         // Only do inlining into fn bodies.
-        let id = self.tcx.hir().as_local_node_id(self.source.def_id()).unwrap();
-        if self.tcx.hir().body_owner_kind(id).is_fn_or_closure() && self.source.promoted.is_none() {
+        let id = self.tcx.hir().as_local_hir_id(self.source.def_id()).unwrap();
+        if self.tcx.hir().body_owner_kind_by_hir_id(id).is_fn_or_closure()
+            && self.source.promoted.is_none()
+        {
             for (bb, bb_data) in caller_mir.basic_blocks().iter_enumerated() {
                 if let Some(callsite) = self.get_valid_function_call(bb,
                                                                     bb_data,
@@ -259,7 +261,7 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
         // inlining. This is to ensure that the final crate doesn't have MIR that
         // reference unexported symbols
         if callsite.callee.is_local() {
-            if callsite.substs.types().count() == 0 && !hinted {
+            if callsite.substs.non_erasable_generics().count() == 0 && !hinted {
                 debug!("    callee is an exported function - not inlining");
                 return false;
             }
@@ -317,8 +319,7 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
                     work_list.push(target);
                     // If the location doesn't actually need dropping, treat it like
                     // a regular goto.
-                    let ty = location.ty(callee_mir, tcx).subst(tcx, callsite.substs);
-                    let ty = ty.to_ty(tcx);
+                    let ty = location.ty(callee_mir, tcx).subst(tcx, callsite.substs).ty;
                     if ty.needs_drop(tcx, param_env) {
                         cost += CALL_PENALTY;
                         if let Some(unwind) = unwind {
@@ -561,7 +562,7 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
             assert!(args.next().is_none());
 
             let tuple = Place::Base(PlaceBase::Local(tuple));
-            let tuple_tys = if let ty::Tuple(s) = tuple.ty(caller_mir, tcx).to_ty(tcx).sty {
+            let tuple_tys = if let ty::Tuple(s) = tuple.ty(caller_mir, tcx).ty.sty {
                 s
             } else {
                 bug!("Closure arguments are not passed as a tuple");
@@ -690,12 +691,14 @@ impl<'a, 'tcx> MutVisitor<'tcx> for Integrator<'a, 'tcx> {
                 // Return pointer; update the place itself
                 *place = self.destination.clone();
             },
-            Place::Base(PlaceBase::Promoted(ref mut promoted)) => {
-                if let Some(p) = self.promoted_map.get(promoted.0).cloned() {
-                    promoted.0 = p;
+            Place::Base(
+                PlaceBase::Static(box Static { kind: StaticKind::Promoted(promoted), .. })
+            ) => {
+                if let Some(p) = self.promoted_map.get(*promoted).cloned() {
+                    *promoted = p;
                 }
             },
-            _ => self.super_place(place, _ctxt, _location),
+            _ => self.super_place(place, _ctxt, _location)
         }
     }
 

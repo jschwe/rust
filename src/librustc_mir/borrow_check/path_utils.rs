@@ -15,9 +15,8 @@ pub(super) fn allow_two_phase_borrow<'a, 'tcx, 'gcx: 'tcx>(
     tcx: &TyCtxt<'a, 'gcx, 'tcx>,
     kind: BorrowKind
 ) -> bool {
-    tcx.two_phase_borrows()
-        && (kind.allows_two_phase_borrow()
-            || tcx.sess.opts.debugging_opts.two_phase_beyond_autoref)
+    kind.allows_two_phase_borrow()
+        || tcx.sess.opts.debugging_opts.two_phase_beyond_autoref
 }
 
 /// Control for the path borrow checking code
@@ -138,7 +137,6 @@ pub(super) fn is_active<'tcx>(
 /// This is called for all Yield statements on movable generators
 pub(super) fn borrow_of_local_data<'tcx>(place: &Place<'tcx>) -> bool {
     match place {
-        Place::Base(PlaceBase::Promoted(_)) |
         Place::Base(PlaceBase::Static(..)) => false,
         Place::Base(PlaceBase::Local(..)) => true,
         Place::Projection(box proj) => {

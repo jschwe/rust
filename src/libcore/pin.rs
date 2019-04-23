@@ -1,4 +1,4 @@
-//! Types which pin data to its location in memory
+//! Types that pin data to its location in memory.
 //!
 //! It is sometimes useful to have objects that are guaranteed to not move,
 //! in the sense that their placement in memory does not change, and can thus be relied upon.
@@ -109,7 +109,7 @@
 //! assert_eq!(still_unmoved.slice, NonNull::from(&still_unmoved.data));
 //!
 //! // Since our type doesn't implement Unpin, this will fail to compile:
-//! // let new_unmoved = Unmovable::new("world".to_string());
+//! // let mut new_unmoved = Unmovable::new("world".to_string());
 //! // std::mem::swap(&mut *still_unmoved, &mut *new_unmoved);
 //! ```
 //!
@@ -158,12 +158,12 @@
 //! is called *even if your type was previously pinned*! It is as if the
 //! compiler automatically called `get_unchecked_mut`.
 //!
-//! This can never cause a problem in safe code because implementing a type that relies on pinning
-//! requires unsafe code, but be aware that deciding to make use of pinning
-//! in your type (for example by implementing some operation on `Pin<&[mut] Self>`)
-//! has consequences for your `Drop` implementation as well: if an element
-//! of your type could have been pinned, you must treat Drop as implicitly taking
-//! `Pin<&mut Self>`.
+//! This can never cause a problem in safe code because implementing a type that
+//! relies on pinning requires unsafe code, but be aware that deciding to make
+//! use of pinning in your type (for example by implementing some operation on
+//! `Pin<&Self>` or `Pin<&mut Self>`) has consequences for your `Drop`
+//! implementation as well: if an element of your type could have been pinned,
+//! you must treat Drop as implicitly taking `Pin<&mut Self>`.
 //!
 //! In particular, if your type is `#[repr(packed)]`, the compiler will automatically
 //! move fields around to be able to drop them. As a consequence, you cannot use
@@ -171,15 +171,19 @@
 //!
 //! # Projections and Structural Pinning
 //!
-//! One interesting question arises when considering the interaction of pinning and
-//! the fields of a struct. When can a struct have a "pinning projection", i.e.,
-//! an operation with type `fn(Pin<&[mut] Struct>) -> Pin<&[mut] Field>`?
-//! In a similar vein, when can a generic wrapper type (such as `Vec<T>`, `Box<T>`, or `RefCell<T>`)
-//! have an operation with type `fn(Pin<&[mut] Wrapper<T>>) -> Pin<&[mut] T>`?
+//! One interesting question arises when considering the interaction of pinning
+//! and the fields of a struct. When can a struct have a "pinning projection",
+//! i.e., an operation with type `fn(Pin<&Struct>) -> Pin<&Field>`?  In a
+//! similar vein, when can a generic wrapper type (such as `Vec<T>`, `Box<T>`,
+//! or `RefCell<T>`) have an operation with type `fn(Pin<&Wrapper<T>>) ->
+//! Pin<&T>`?
+//!
+//! Note: For the entirety of this discussion, the same applies for mutable references as it
+//! does for shared references.
 //!
 //! Having a pinning projection for some field means that pinning is "structural":
 //! when the wrapper is pinned, the field must be considered pinned, too.
-//! After all, the pinning projection lets us get a `Pin<&[mut] Field>`.
+//! After all, the pinning projection lets us get a `Pin<&Field>`.
 //!
 //! However, structural pinning comes with a few extra requirements, so not all
 //! wrappers can be structural and hence not all wrappers can offer pinning projections:
@@ -259,10 +263,10 @@
 
 #![stable(feature = "pin", since = "1.33.0")]
 
-use fmt;
-use marker::{Sized, Unpin};
-use cmp::{self, PartialEq, PartialOrd};
-use ops::{Deref, DerefMut, Receiver, CoerceUnsized, DispatchFromDyn};
+use crate::fmt;
+use crate::marker::{Sized, Unpin};
+use crate::cmp::{self, PartialEq, PartialOrd};
+use crate::ops::{Deref, DerefMut, Receiver, CoerceUnsized, DispatchFromDyn};
 
 /// A pinned pointer.
 ///
@@ -598,21 +602,21 @@ impl<P: Receiver> Receiver for Pin<P> {}
 
 #[stable(feature = "pin", since = "1.33.0")]
 impl<P: fmt::Debug> fmt::Debug for Pin<P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&self.pointer, f)
     }
 }
 
 #[stable(feature = "pin", since = "1.33.0")]
 impl<P: fmt::Display> fmt::Display for Pin<P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.pointer, f)
     }
 }
 
 #[stable(feature = "pin", since = "1.33.0")]
 impl<P: fmt::Pointer> fmt::Pointer for Pin<P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Pointer::fmt(&self.pointer, f)
     }
 }

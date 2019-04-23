@@ -8,6 +8,7 @@
        test(attr(deny(warnings))))]
 
 #![deny(rust_2018_idioms)]
+#![deny(internal)]
 
 #![feature(crate_visibility_modifier)]
 #![feature(label_break_value)]
@@ -113,7 +114,7 @@ pub mod diagnostics {
 
 // N.B., this module needs to be declared first so diagnostics are
 // registered before they are used.
-pub mod diagnostic_list;
+pub mod error_codes;
 
 pub mod util {
     pub mod lev_distance;

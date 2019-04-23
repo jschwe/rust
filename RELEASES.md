@@ -1,13 +1,159 @@
+Version 1.34.0 (2019-04-11)
+==========================
+
+Language
+--------
+- [You can now use `#[deprecated = "reason"]`][58166] as a shorthand for
+  `#[deprecated(note = "reason")]`. This was previously allowed by mistake
+  but had no effect.
+- [You can now accept token streams in `#[attr()]`,`#[attr[]]`, and
+  `#[attr{}]` procedural macros.][57367]
+- [You can now write `extern crate self as foo;`][57407] to import your
+  crate's root into the extern prelude.
+
+
+Compiler
+--------
+- [You can now target `riscv64imac-unknown-none-elf` and
+  `riscv64gc-unknown-none-elf`.][58406]
+- [You can now enable linker plugin LTO optimisations with
+  `-C linker-plugin-lto`.][58057] This allows rustc to compile your Rust code
+  into LLVM bitcode allowing LLVM to perform LTO optimisations across C/C++ FFI
+  boundaries.
+- [You can now target `powerpc64-unknown-freebsd`.][57809]
+
+
+Libraries
+---------
+- [The trait bounds have been removed on some of `HashMap<K, V, S>`'s and
+  `HashSet<T, S>`'s basic methods.][58370] Most notably you no longer require
+  the `Hash` trait to create an iterator.
+- [The `Ord` trait bounds have been removed on some of `BinaryHeap<T>`'s basic
+  methods.][58421] Most notably you no longer require the `Ord` trait to create
+  an iterator.
+- [The methods `overflowing_neg` and `wrapping_neg` are now `const` functions
+  for all numeric types.][58044]
+- [Indexing a `str` is now generic over all types that
+  implement `SliceIndex<str>`.][57604]
+- [`str::trim`, `str::trim_matches`, `str::trim_{start, end}`, and
+  `str::trim_{start, end}_matches` are now `#[must_use]`][57106] and will
+  produce a warning if their returning type is unused.
+- [The methods `checked_pow`, `saturating_pow`, `wrapping_pow`, and
+  `overflowing_pow` are now available for all numeric types.][57873] These are
+  equivalvent to methods such as `wrapping_add` for the `pow` operation.
+
+
+Stabilized APIs
+---------------
+
+#### std & core
+* [`Any::type_id`]
+* [`Error::type_id`]
+* [`atomic::AtomicI16`]
+* [`atomic::AtomicI32`]
+* [`atomic::AtomicI64`]
+* [`atomic::AtomicI8`]
+* [`atomic::AtomicU16`]
+* [`atomic::AtomicU32`]
+* [`atomic::AtomicU64`]
+* [`atomic::AtomicU8`]
+* [`convert::Infallible`]
+* [`convert::TryFrom`]
+* [`convert::TryInto`]
+* [`iter::from_fn`]
+* [`iter::successors`]
+* [`num::NonZeroI128`]
+* [`num::NonZeroI16`]
+* [`num::NonZeroI32`]
+* [`num::NonZeroI64`]
+* [`num::NonZeroI8`]
+* [`num::NonZeroIsize`]
+* [`slice::sort_by_cached_key`]
+* [`str::escape_debug`]
+* [`str::escape_default`]
+* [`str::escape_unicode`]
+* [`str::split_ascii_whitespace`]
+
+#### std
+* [`Instant::checked_add`]
+* [`Instant::checked_sub`]
+* [`SystemTime::checked_add`]
+* [`SystemTime::checked_sub`]
+
+Cargo
+-----
+- [You can now use alternative registries to crates.io.][cargo/6654]
+
+Misc
+----
+- [You can now use the `?` operator in your documentation tests without manually
+  adding `fn main() -> Result<(), _> {}`.][56470]
+
+Compatibility Notes
+-------------------
+- [`Command::before_exec` is now deprecated in favor of the
+  unsafe method `Command::pre_exec`.][58059]
+- [Use of `ATOMIC_{BOOL, ISIZE, USIZE}_INIT` is now deprecated.][57425] As you
+  can now use `const` functions in `static` variables.
+
+[58370]: https://github.com/rust-lang/rust/pull/58370/
+[58406]: https://github.com/rust-lang/rust/pull/58406/
+[58421]: https://github.com/rust-lang/rust/pull/58421/
+[58166]: https://github.com/rust-lang/rust/pull/58166/
+[58044]: https://github.com/rust-lang/rust/pull/58044/
+[58057]: https://github.com/rust-lang/rust/pull/58057/
+[58059]: https://github.com/rust-lang/rust/pull/58059/
+[57809]: https://github.com/rust-lang/rust/pull/57809/
+[57873]: https://github.com/rust-lang/rust/pull/57873/
+[57604]: https://github.com/rust-lang/rust/pull/57604/
+[57367]: https://github.com/rust-lang/rust/pull/57367/
+[57407]: https://github.com/rust-lang/rust/pull/57407/
+[57425]: https://github.com/rust-lang/rust/pull/57425/
+[57106]: https://github.com/rust-lang/rust/pull/57106/
+[56470]: https://github.com/rust-lang/rust/pull/56470/
+[cargo/6654]: https://github.com/rust-lang/cargo/pull/6654/
+[`Any::type_id`]: https://doc.rust-lang.org/std/any/trait.Any.html#tymethod.type_id
+[`Error::type_id`]: https://doc.rust-lang.org/std/error/trait.Error.html#method.type_id
+[`atomic::AtomicI16`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicI16.html
+[`atomic::AtomicI32`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicI32.html
+[`atomic::AtomicI64`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicI64.html
+[`atomic::AtomicI8`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicI8.html
+[`atomic::AtomicU16`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicU16.html
+[`atomic::AtomicU32`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicU32.html
+[`atomic::AtomicU64`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicU64.html
+[`atomic::AtomicU8`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicU8.html
+[`convert::Infallible`]: https://doc.rust-lang.org/std/convert/enum.Infallible.html
+[`convert::TryFrom`]: https://doc.rust-lang.org/std/convert/trait.TryFrom.html
+[`convert::TryInto`]: https://doc.rust-lang.org/std/convert/trait.TryInto.html
+[`iter::from_fn`]: https://doc.rust-lang.org/std/iter/fn.from_fn.html
+[`iter::successors`]: https://doc.rust-lang.org/std/iter/fn.successors.html
+[`num::NonZeroI128`]: https://doc.rust-lang.org/std/num/struct.NonZeroI128.html
+[`num::NonZeroI16`]: https://doc.rust-lang.org/std/num/struct.NonZeroI16.html
+[`num::NonZeroI32`]: https://doc.rust-lang.org/std/num/struct.NonZeroI32.html
+[`num::NonZeroI64`]: https://doc.rust-lang.org/std/num/struct.NonZeroI64.html
+[`num::NonZeroI8`]: https://doc.rust-lang.org/std/num/struct.NonZeroI8.html
+[`num::NonZeroIsize`]: https://doc.rust-lang.org/std/num/struct.NonZeroIsize.html
+[`slice::sort_by_cached_key`]: https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by_cached_key
+[`str::escape_debug`]: https://doc.rust-lang.org/std/primitive.str.html#method.escape_debug
+[`str::escape_default`]: https://doc.rust-lang.org/std/primitive.str.html#method.escape_default
+[`str::escape_unicode`]: https://doc.rust-lang.org/std/primitive.str.html#method.escape_unicode
+[`str::split_ascii_whitespace`]: https://doc.rust-lang.org/std/primitive.str.html#method.split_ascii_whitespace
+[`Instant::checked_add`]: https://doc.rust-lang.org/std/time/struct.Instant.html#method.checked_add
+[`Instant::checked_sub`]: https://doc.rust-lang.org/std/time/struct.Instant.html#method.checked_sub
+[`SystemTime::checked_add`]: https://doc.rust-lang.org/std/time/struct.SystemTime.html#method.checked_add
+[`SystemTime::checked_sub`]: https://doc.rust-lang.org/std/time/struct.SystemTime.html#method.checked_sub
+
+
 Version 1.33.0 (2019-02-28)
 ==========================
 
 Language
 --------
 - [You can now use the `cfg(target_vendor)` attribute.][57465] E.g.
-  `#[cfg(target_vendor="linux")] fn main() { println!("Hello Linux!"); }`
+  `#[cfg(target_vendor="apple")] fn main() { println!("Hello Apple!"); }`
 - [Integer patterns such as in a match expression can now be exhaustive.][56362]
   E.g. You can have match statement on a `u8` that covers `0..=255` and
-  you would no longer be required to have a `_ => unreachable!()` case. 
+  you would no longer be required to have a `_ => unreachable!()` case.
 - [You can now have multiple patterns in `if let` and `while let`
   expressions.][57532] You can do this with the same syntax as a `match`
   expression. E.g.
@@ -51,8 +197,7 @@ Language
   // Allowed as there is only one `Read` in the module.
   pub trait Read {}
   ```
-- [`extern` functions will now abort by default when panicking.][55982]
-  This was previously undefined behaviour.
+- [You may now use `Rc`, `Arc`, and `Pin` as method receivers][56805].
 
 Compiler
 --------
@@ -100,6 +245,8 @@ Stabilized APIs
 
 Cargo
 -----
+- [You can now publish crates that require a feature flag to compile with
+  `cargo publish --features` or `cargo publish --all-features`.][cargo/6453]
 - [Cargo should now rebuild a crate if a file was modified during the initial
   build.][cargo/6484]
 
@@ -109,27 +256,34 @@ Compatibility Notes
   are now deprecated in the standard library, and their usage will now produce a warning.
   Please use the `str::{trim_start, trim_end, trim_start_matches, trim_end_matches}`
   methods instead.
+- The `Error::cause` method has been deprecated in favor of `Error::source` which supports
+  downcasting.
+- [Libtest no longer creates a new thread for each test when
+  `--test-threads=1`.  It also runs the tests in deterministic order][56243]
 
-[57615]: https://github.com/rust-lang/rust/pull/57615/
-[57465]: https://github.com/rust-lang/rust/pull/57465/
-[57532]: https://github.com/rust-lang/rust/pull/57532/
-[57535]: https://github.com/rust-lang/rust/pull/57535/
-[57566]: https://github.com/rust-lang/rust/pull/57566/
+[55982]: https://github.com/rust-lang/rust/pull/55982/
+[56243]: https://github.com/rust-lang/rust/pull/56243
+[56303]: https://github.com/rust-lang/rust/pull/56303/
+[56351]: https://github.com/rust-lang/rust/pull/56351/
+[56362]: https://github.com/rust-lang/rust/pull/56362
+[56642]: https://github.com/rust-lang/rust/pull/56642/
+[56769]: https://github.com/rust-lang/rust/pull/56769/
+[56805]: https://github.com/rust-lang/rust/pull/56805
+[56947]: https://github.com/rust-lang/rust/pull/56947/
+[57049]: https://github.com/rust-lang/rust/pull/57049/
+[57067]: https://github.com/rust-lang/rust/pull/57067/
+[57105]: https://github.com/rust-lang/rust/pull/57105
 [57130]: https://github.com/rust-lang/rust/pull/57130/
 [57167]: https://github.com/rust-lang/rust/pull/57167/
 [57175]: https://github.com/rust-lang/rust/pull/57175/
 [57234]: https://github.com/rust-lang/rust/pull/57234/
 [57332]: https://github.com/rust-lang/rust/pull/57332/
-[56947]: https://github.com/rust-lang/rust/pull/56947/
-[57049]: https://github.com/rust-lang/rust/pull/57049/
-[57067]: https://github.com/rust-lang/rust/pull/57067/
-[56769]: https://github.com/rust-lang/rust/pull/56769/
-[56642]: https://github.com/rust-lang/rust/pull/56642/
-[56303]: https://github.com/rust-lang/rust/pull/56303/
-[56351]: https://github.com/rust-lang/rust/pull/56351/
-[55982]: https://github.com/rust-lang/rust/pull/55982/
-[56362]: https://github.com/rust-lang/rust/pull/56362
-[57105]: https://github.com/rust-lang/rust/pull/57105
+[57465]: https://github.com/rust-lang/rust/pull/57465/
+[57532]: https://github.com/rust-lang/rust/pull/57532/
+[57535]: https://github.com/rust-lang/rust/pull/57535/
+[57566]: https://github.com/rust-lang/rust/pull/57566/
+[57615]: https://github.com/rust-lang/rust/pull/57615/
+[cargo/6453]: https://github.com/rust-lang/cargo/pull/6453/
 [cargo/6484]: https://github.com/rust-lang/cargo/pull/6484/
 [`unix::FileExt::read_exact_at`]: https://doc.rust-lang.org/std/os/unix/fs/trait.FileExt.html#method.read_exact_at
 [`unix::FileExt::write_all_at`]: https://doc.rust-lang.org/std/os/unix/fs/trait.FileExt.html#method.write_all_at
@@ -170,7 +324,7 @@ Language
 - [You can now match against literals in macros with the `literal`
   specifier.][56072] This will match against a literal of any type.
   E.g. `1`, `'A'`, `"Hello World"`
-- [Self can now be used as a constructor and pattern for unit and tuple structs.][56365] E.g. 
+- [Self can now be used as a constructor and pattern for unit and tuple structs.][56365] E.g.
   ```rust
   struct Point(i32, i32);
 
@@ -460,7 +614,7 @@ Version 1.31.0 (2018-12-06)
 
 Language
 --------
-- 🎉 [This version marks the release of the 2018 edition of Rust.][54057] 🎉 
+- 🎉 [This version marks the release of the 2018 edition of Rust.][54057] 🎉
 - [New lifetime elision rules now allow for eliding lifetimes in functions and
   impl headers.][54778] E.g. `impl<'a> Reader for BufReader<'a> {}` can now be
   `impl Reader for BufReader<'_> {}`. Lifetimes are still required to be defined

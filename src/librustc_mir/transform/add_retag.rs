@@ -22,7 +22,6 @@ fn is_stable<'tcx>(
     match *place {
         // Locals and statics have stable addresses, for sure
         Base(PlaceBase::Local { .. }) |
-        Base(PlaceBase::Promoted { .. }) |
         Base(PlaceBase::Static { .. }) =>
             true,
         // Recurse for projections
@@ -88,7 +87,7 @@ impl MirPass for AddRetag {
         let needs_retag = |place: &Place<'tcx>| {
             // FIXME: Instead of giving up for unstable places, we should introduce
             // a temporary and retag on that.
-            is_stable(place) && may_have_reference(place.ty(&*local_decls, tcx).to_ty(tcx), tcx)
+            is_stable(place) && may_have_reference(place.ty(&*local_decls, tcx).ty, tcx)
         };
 
         // PART 1
@@ -165,7 +164,7 @@ impl MirPass for AddRetag {
                         if src_ty.is_region_ptr() {
                             // The only `Misc` casts on references are those creating raw pointers.
                             assert!(dest_ty.is_unsafe_ptr());
-                            (RetagKind::Raw, place)
+                            (RetagKind::Raw, place.clone())
                         } else {
                             // Some other cast, no retag
                             continue
@@ -183,7 +182,7 @@ impl MirPass for AddRetag {
                             _ =>
                                 RetagKind::Default,
                         };
-                        (kind, place)
+                        (kind, place.clone())
                     }
                     // Do nothing for the rest
                     _ => continue,
@@ -192,7 +191,7 @@ impl MirPass for AddRetag {
                 let source_info = block_data.statements[i].source_info;
                 block_data.statements.insert(i+1, Statement {
                     source_info,
-                    kind: StatementKind::Retag(retag_kind, place.clone()),
+                    kind: StatementKind::Retag(retag_kind, place),
                 });
             }
         }

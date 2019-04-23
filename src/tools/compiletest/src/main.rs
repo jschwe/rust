@@ -1,5 +1,6 @@
 #![crate_name = "compiletest"]
 #![feature(test)]
+#![feature(vec_remove_item)]
 #![deny(warnings, rust_2018_idioms)]
 
 #[cfg(unix)]
@@ -233,6 +234,12 @@ pub fn parse_config(args: Vec<String>) -> Config {
             "mode describing what file the actual ui output will be compared to",
             "COMPARE MODE",
         )
+        .optflag(
+            "",
+            "rustfix-coverage",
+            "enable this to generate a Rustfix coverage file, which is saved in \
+                `./<build_base>/rustfix_missing_coverage.txt`",
+        )
         .optflag("h", "help", "show this message");
 
     let (argv0, args_) = args.split_first().unwrap();
@@ -336,6 +343,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
         color,
         remote_test_client: matches.opt_str("remote-test-client").map(PathBuf::from),
         compare_mode: matches.opt_str("compare-mode").map(CompareMode::parse),
+        rustfix_coverage: matches.opt_present("rustfix-coverage"),
 
         cc: matches.opt_str("cc").unwrap(),
         cxx: matches.opt_str("cxx").unwrap(),
@@ -475,6 +483,19 @@ pub fn run_tests(config: &Config) {
         let _ = fs::remove_dir_all("tmp/partitioning-tests");
     }
 
+    // If we want to collect rustfix coverage information,
+    // we first make sure that the coverage file does not exist.
+    // It will be created later on.
+    if config.rustfix_coverage {
+        let mut coverage_file_path = config.build_base.clone();
+        coverage_file_path.push("rustfix_missing_coverage.txt");
+        if coverage_file_path.exists() {
+            if let Err(e) = fs::remove_file(&coverage_file_path) {
+                panic!("Could not delete {} due to {}", coverage_file_path.display(), e)
+            }
+        }
+    }
+
     let opts = test_opts(config);
     let tests = make_tests(config);
     // sadly osx needs some file descriptor limits raised for running tests in
@@ -502,6 +523,7 @@ pub fn run_tests(config: &Config) {
 
 pub fn test_opts(config: &Config) -> test::TestOpts {
     test::TestOpts {
+        exclude_should_panic: false,
         filter: config.filter.clone(),
         filter_exact: config.filter_exact,
         run_ignored: if config.run_ignored {
@@ -598,6 +620,8 @@ fn collect_tests_from_dir(
     Ok(())
 }
 
+
+/// Returns true if `file_name` looks like a proper test file name.
 pub fn is_test(file_name: &OsString) -> bool {
     let file_name = file_name.to_str().unwrap();
 
@@ -1047,4 +1071,13 @@ fn test_extract_gdb_version() {
         7012000: "GNU gdb (GDB) 7.12.20161027-git",
         7012050: "GNU gdb (GDB) 7.12.50.20161027-git",
     }
+}
+
+#[test]
+fn is_test_test() {
+    assert_eq!(true, is_test(&OsString::from("a_test.rs")));
+    assert_eq!(false, is_test(&OsString::from(".a_test.rs")));
+    assert_eq!(false, is_test(&OsString::from("a_cat.gif")));
+    assert_eq!(false, is_test(&OsString::from("#a_dog_gif")));
+    assert_eq!(false, is_test(&OsString::from("~a_temp_file")));
 }

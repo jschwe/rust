@@ -29,8 +29,10 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![deny(rust_2018_idioms)]
+#![deny(internal)]
 #![allow(explicit_outlives_requirements)]
 
+#![feature(arbitrary_self_types)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(core_intrinsics)]
@@ -38,12 +40,13 @@
 #![cfg_attr(windows, feature(libc))]
 #![feature(never_type)]
 #![feature(exhaustive_patterns)]
+#![feature(overlapping_marker_traits)]
 #![feature(extern_types)]
 #![feature(nll)]
 #![feature(non_exhaustive)]
 #![feature(proc_macro_internals)]
 #![feature(optin_builtin_traits)]
-#![feature(refcell_replace_swap)]
+#![feature(range_is_empty)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_attrs)]
 #![feature(slice_patterns)]
@@ -59,6 +62,8 @@
 #![feature(test)]
 #![feature(in_band_lifetimes)]
 #![feature(crate_visibility_modifier)]
+#![feature(proc_macro_hygiene)]
+#![feature(log_syntax)]
 
 #![recursion_limit="512"]
 
@@ -68,6 +73,7 @@ extern crate getopts;
 #[macro_use] extern crate scoped_tls;
 #[cfg(windows)]
 extern crate libc;
+#[macro_use] extern crate rustc_macros;
 #[macro_use] extern crate rustc_data_structures;
 
 #[macro_use] extern crate log;
@@ -93,8 +99,13 @@ mod macros;
 
 // N.B., this module needs to be declared first so diagnostics are
 // registered before they are used.
-pub mod diagnostics;
+pub mod error_codes;
 
+#[macro_use]
+pub mod query;
+
+#[macro_use]
+pub mod arena;
 pub mod cfg;
 pub mod dep_graph;
 pub mod hir;
@@ -134,21 +145,13 @@ pub mod ty;
 pub mod util {
     pub mod captures;
     pub mod common;
-    pub mod ppaux;
     pub mod nodemap;
-    pub mod time_graph;
     pub mod profiling;
     pub mod bug;
 }
 
-// A private module so that macro-expanded idents like
-// `::rustc::lint::Lint` will also work in `rustc` itself.
-//
-// `libstd` uses the same trick.
-#[doc(hidden)]
-mod rustc {
-    pub use crate::lint;
-}
+// Allows macros to refer to this crate as `::rustc`
+extern crate self as rustc;
 
 // FIXME(#27438): right now the unit tests of librustc don't refer to any actual
 //                functions generated in librustc_data_structures (all

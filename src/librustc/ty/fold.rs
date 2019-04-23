@@ -32,7 +32,7 @@
 //! looking for, and does not need to visit anything else.
 
 use crate::hir::def_id::DefId;
-use crate::ty::{self, Binder, Ty, TyCtxt, TypeFlags};
+use crate::ty::{self, Binder, Ty, TyCtxt, TypeFlags, flags::FlagComputation};
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -91,7 +91,9 @@ pub trait TypeFoldable<'tcx>: fmt::Debug + Clone {
         self.has_type_flags(TypeFlags::HAS_TY_INFER)
     }
     fn needs_infer(&self) -> bool {
-        self.has_type_flags(TypeFlags::HAS_TY_INFER | TypeFlags::HAS_RE_INFER)
+        self.has_type_flags(
+            TypeFlags::HAS_TY_INFER | TypeFlags::HAS_RE_INFER | TypeFlags::HAS_CT_INFER
+        )
     }
     fn has_placeholders(&self) -> bool {
         self.has_type_flags(TypeFlags::HAS_RE_PLACEHOLDER | TypeFlags::HAS_TY_PLACEHOLDER)
@@ -117,7 +119,7 @@ pub trait TypeFoldable<'tcx>: fmt::Debug + Clone {
     }
 
     /// Indicates whether this value references only 'global'
-    /// types/lifetimes that are the same regardless of what fn we are
+    /// generic parameters that are the same regardless of what fn we are
     /// in. This is used for caching.
     fn is_global(&self) -> bool {
         !self.has_type_flags(TypeFlags::HAS_FREE_LOCAL_NAMES)
@@ -165,7 +167,7 @@ pub trait TypeFolder<'gcx: 'tcx, 'tcx> : Sized {
         r.super_fold_with(self)
     }
 
-    fn fold_const(&mut self, c: &'tcx ty::LazyConst<'tcx>) -> &'tcx ty::LazyConst<'tcx> {
+    fn fold_const(&mut self, c: &'tcx ty::Const<'tcx>) -> &'tcx ty::Const<'tcx> {
         c.super_fold_with(self)
     }
 }
@@ -183,7 +185,7 @@ pub trait TypeVisitor<'tcx> : Sized {
         r.super_visit_with(self)
     }
 
-    fn visit_const(&mut self, c: &'tcx ty::LazyConst<'tcx>) -> bool {
+    fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> bool {
         c.super_visit_with(self)
     }
 }
@@ -840,15 +842,10 @@ impl<'tcx> TypeVisitor<'tcx> for HasTypeFlagsVisitor {
         flags.intersects(self.flags)
     }
 
-    fn visit_const(&mut self, c: &'tcx ty::LazyConst<'tcx>) -> bool {
-        if let ty::LazyConst::Unevaluated(..) = c {
-            let projection_flags = TypeFlags::HAS_NORMALIZABLE_PROJECTION |
-                TypeFlags::HAS_PROJECTION;
-            if projection_flags.intersects(self.flags) {
-                return true;
-            }
-        }
-        c.super_visit_with(self)
+    fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> bool {
+        let flags = FlagComputation::for_const(c);
+        debug!("HasTypeFlagsVisitor: c={:?} c.flags={:?} self.flags={:?}", c, flags, self.flags);
+        flags.intersects(self.flags) || c.super_visit_with(self)
     }
 }
 

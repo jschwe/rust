@@ -18,6 +18,7 @@ use build_helper::output;
 use cmake;
 use cc;
 
+use crate::channel;
 use crate::util::{self, exe};
 use build_helper::up_to_date;
 use crate::builder::{Builder, RunConfig, ShouldRun, Step};
@@ -66,30 +67,40 @@ impl Step for Llvm {
             }
         }
 
-        let rebuild_trigger = builder.src.join("src/rustllvm/llvm-rebuild-trigger");
-        let rebuild_trigger_contents = t!(fs::read_to_string(&rebuild_trigger));
-
-        let (out_dir, llvm_config_ret_dir) = if emscripten {
+        let (llvm_info, root, out_dir, llvm_config_ret_dir) = if emscripten {
+            let info = &builder.emscripten_llvm_info;
             let dir = builder.emscripten_llvm_out(target);
             let config_dir = dir.join("bin");
-            (dir, config_dir)
+            (info, "src/llvm-emscripten", dir, config_dir)
         } else {
+            let info = &builder.in_tree_llvm_info;
             let mut dir = builder.llvm_out(builder.config.build);
             if !builder.config.build.contains("msvc") || builder.config.ninja {
                 dir.push("build");
             }
-            (builder.llvm_out(target), dir.join("bin"))
+            (info, "src/llvm-project/llvm", builder.llvm_out(target), dir.join("bin"))
         };
-        let done_stamp = out_dir.join("llvm-finished-building");
+
+        if !llvm_info.is_git() {
+            println!(
+                "git could not determine the LLVM submodule commit hash. \
+                Assuming that an LLVM build is necessary.",
+            );
+        }
+
         let build_llvm_config = llvm_config_ret_dir
             .join(exe("llvm-config", &*builder.config.build));
-        if done_stamp.exists() {
-            let done_contents = t!(fs::read_to_string(&done_stamp));
+        let done_stamp = out_dir.join("llvm-finished-building");
 
-            // If LLVM was already built previously and contents of the rebuild-trigger file
-            // didn't change from the previous build, then no action is required.
-            if done_contents == rebuild_trigger_contents {
-                return build_llvm_config
+        if let Some(llvm_commit) = llvm_info.sha() {
+            if done_stamp.exists() {
+                let done_contents = t!(fs::read(&done_stamp));
+
+                // If LLVM was already built previously and the submodule's commit didn't change
+                // from the previous build, then no action is required.
+                if done_contents == llvm_commit.as_bytes() {
+                    return build_llvm_config
+                }
             }
         }
 
@@ -100,7 +111,6 @@ impl Step for Llvm {
         t!(fs::create_dir_all(&out_dir));
 
         // http://llvm.org/docs/CMake.html
-        let root = if self.emscripten { "src/llvm-emscripten" } else { "src/llvm-project/llvm" };
         let mut cfg = cmake::Config::new(builder.src.join(root));
 
         let profile = match (builder.config.llvm_optimize, builder.config.llvm_release_debuginfo) {
@@ -146,8 +156,10 @@ impl Step for Llvm {
            .define("LLVM_DEFAULT_TARGET_TRIPLE", target);
 
         if builder.config.llvm_thin_lto && !emscripten {
-            cfg.define("LLVM_ENABLE_LTO", "Thin")
-               .define("LLVM_ENABLE_LLD", "ON");
+            cfg.define("LLVM_ENABLE_LTO", "Thin");
+            if !target.contains("apple") {
+               cfg.define("LLVM_ENABLE_LLD", "ON");
+            }
         }
 
         // By default, LLVM will automatically find OCaml and, if it finds it,
@@ -231,7 +243,21 @@ impl Step for Llvm {
         }
 
         if let Some(ref suffix) = builder.config.llvm_version_suffix {
-            cfg.define("LLVM_VERSION_SUFFIX", suffix);
+            // Allow version-suffix="" to not define a version suffix at all.
+            if !suffix.is_empty() {
+                cfg.define("LLVM_VERSION_SUFFIX", suffix);
+            }
+        } else {
+            let mut default_suffix = format!(
+                "-rust-{}-{}",
+                channel::CFG_RELEASE_NUM,
+                builder.config.channel,
+            );
+            if let Some(sha) = llvm_info.sha_short() {
+                default_suffix.push_str("-");
+                default_suffix.push_str(sha);
+            }
+            cfg.define("LLVM_VERSION_SUFFIX", default_suffix);
         }
 
         if let Some(ref linker) = builder.config.llvm_use_linker {
@@ -259,7 +285,9 @@ impl Step for Llvm {
 
         cfg.build();
 
-        t!(fs::write(&done_stamp, &rebuild_trigger_contents));
+        if let Some(llvm_commit) = llvm_info.sha() {
+            t!(fs::write(&done_stamp, llvm_commit));
+        }
 
         build_llvm_config
     }

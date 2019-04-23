@@ -374,6 +374,7 @@ impl<'a> Builder<'a> {
                 test::MirOpt,
                 test::Codegen,
                 test::CodegenUnits,
+                test::Assembly,
                 test::Incremental,
                 test::Debuginfo,
                 test::UiFullDeps,
@@ -401,17 +402,19 @@ impl<'a> Builder<'a> {
                 test::UnstableBook,
                 test::RustcBook,
                 test::EmbeddedBook,
+                test::EditionGuide,
                 test::Rustfmt,
                 test::Miri,
                 test::Clippy,
                 test::CompiletestTest,
-                test::RustdocJS,
+                test::RustdocJSStd,
+                test::RustdocJSNotStd,
                 test::RustdocTheme,
+                test::RustdocUi,
                 // Run bootstrap close to the end as it's unlikely to fail
                 test::Bootstrap,
                 // Run run-make last, since these won't pass without make on Windows
                 test::RunMake,
-                test::RustdocUi
             ),
             Kind::Bench => describe!(test::Crate, test::CrateLibrustc),
             Kind::Doc => describe!(
@@ -631,7 +634,28 @@ impl<'a> Builder<'a> {
         if compiler.is_snapshot(self) {
             self.rustc_snapshot_libdir()
         } else {
-            self.sysroot(compiler).join(libdir(&compiler.host))
+            match self.config.libdir_relative() {
+                Some(relative_libdir) if compiler.stage >= 1
+                    => self.sysroot(compiler).join(relative_libdir),
+                _ => self.sysroot(compiler).join(libdir(&compiler.host))
+            }
+        }
+    }
+
+    /// Returns the compiler's relative libdir where it stores the dynamic libraries that
+    /// it itself links against.
+    ///
+    /// For example this returns `lib` on Unix and `bin` on
+    /// Windows.
+    pub fn libdir_relative(&self, compiler: Compiler) -> &Path {
+        if compiler.is_snapshot(self) {
+            libdir(&self.config.build).as_ref()
+        } else {
+            match self.config.libdir_relative() {
+                Some(relative_libdir) if compiler.stage >= 1
+                    => relative_libdir,
+                _ => libdir(&compiler.host).as_ref()
+            }
         }
     }
 
@@ -668,20 +692,19 @@ impl<'a> Builder<'a> {
             .map(|entry| entry.path())
     }
 
-    pub fn rustdoc(&self, host: Interned<String>) -> PathBuf {
-        self.ensure(tool::Rustdoc { host })
+    pub fn rustdoc(&self, compiler: Compiler) -> PathBuf {
+        self.ensure(tool::Rustdoc { compiler })
     }
 
-    pub fn rustdoc_cmd(&self, host: Interned<String>) -> Command {
+    pub fn rustdoc_cmd(&self, compiler: Compiler) -> Command {
         let mut cmd = Command::new(&self.out.join("bootstrap/debug/rustdoc"));
-        let compiler = self.compiler(self.top_stage, host);
         cmd.env("RUSTC_STAGE", compiler.stage.to_string())
             .env("RUSTC_SYSROOT", self.sysroot(compiler))
             // Note that this is *not* the sysroot_libdir because rustdoc must be linked
             // equivalently to rustc.
             .env("RUSTDOC_LIBDIR", self.rustc_libdir(compiler))
             .env("CFG_RELEASE_CHANNEL", &self.config.channel)
-            .env("RUSTDOC_REAL", self.rustdoc(host))
+            .env("RUSTDOC_REAL", self.rustdoc(compiler))
             .env("RUSTDOC_CRATE_VERSION", self.rust_version())
             .env("RUSTC_BOOTSTRAP", "1");
 
@@ -689,7 +712,7 @@ impl<'a> Builder<'a> {
         cmd.env_remove("MAKEFLAGS");
         cmd.env_remove("MFLAGS");
 
-        if let Some(linker) = self.linker(host) {
+        if let Some(linker) = self.linker(compiler.host) {
             cmd.env("RUSTC_TARGET_LINKER", linker);
         }
         cmd
@@ -751,7 +774,7 @@ impl<'a> Builder<'a> {
                 // This is the intended out directory for compiler documentation.
                 my_out = self.compiler_doc_out(target);
             }
-            let rustdoc = self.rustdoc(compiler.host);
+            let rustdoc = self.rustdoc(compiler);
             self.clear_if_dirty(&my_out, &rustdoc);
         } else if cmd != "test" {
             match mode {
@@ -810,6 +833,17 @@ impl<'a> Builder<'a> {
         // (e.g., not building/requiring LLVM).
         if cmd == "check" {
             cargo.env("RUST_CHECK", "1");
+        }
+
+        match mode {
+            Mode::Std | Mode::Test | Mode::ToolBootstrap | Mode::ToolStd | Mode::ToolTest=> {},
+            Mode::Rustc | Mode::Codegen | Mode::ToolRustc => {
+                // Build proc macros both for the host and the target
+                if target != compiler.host && cmd != "check" {
+                    cargo.arg("-Zdual-proc-macros");
+                    cargo.env("RUST_DUAL_PROC_MACROS", "1");
+                }
+            },
         }
 
         cargo.arg("-j").arg(self.jobs().to_string());
@@ -897,7 +931,7 @@ impl<'a> Builder<'a> {
             .env(
                 "RUSTDOC_REAL",
                 if cmd == "doc" || cmd == "rustdoc" || (cmd == "test" && want_rustdoc) {
-                    self.rustdoc(compiler.host)
+                    self.rustdoc(compiler)
                 } else {
                     PathBuf::from("/path/to/nowhere/rustdoc/not/required")
                 },
@@ -984,10 +1018,7 @@ impl<'a> Builder<'a> {
         // For other crates, however, we know that we've already got a standard
         // library up and running, so we can use the normal compiler to compile
         // build scripts in that situation.
-        //
-        // If LLVM support is disabled we need to use the snapshot compiler to compile
-        // build scripts, as the new compiler doesn't support executables.
-        if mode == Mode::Std || !self.config.llvm_enabled {
+        if mode == Mode::Std {
             cargo
                 .env("RUSTC_SNAPSHOT", &self.initial_rustc)
                 .env("RUSTC_SNAPSHOT_LIBDIR", self.rustc_snapshot_libdir());
@@ -1847,6 +1878,7 @@ mod __test {
             doc_tests: DocTests::No,
             bless: false,
             compare_mode: None,
+            rustfix_coverage: false,
         };
 
         let build = Build::new(config);
@@ -1888,6 +1920,7 @@ mod __test {
             doc_tests: DocTests::No,
             bless: false,
             compare_mode: None,
+            rustfix_coverage: false,
         };
 
         let build = Build::new(config);

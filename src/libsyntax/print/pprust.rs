@@ -645,7 +645,7 @@ pub trait PrintState<'a> {
             ast::LitKind::Float(ref f, t) => {
                 self.writer().word(format!("{}{}", &f, t.ty_to_string()))
             }
-            ast::LitKind::FloatUnsuffixed(ref f) => self.writer().word(f.as_str().get()),
+            ast::LitKind::FloatUnsuffixed(ref f) => self.writer().word(f.as_str().to_string()),
             ast::LitKind::Bool(val) => {
                 if val { self.writer().word("true") } else { self.writer().word("false") }
             }
@@ -731,7 +731,7 @@ pub trait PrintState<'a> {
                 if segment.ident.name == keywords::DollarCrate.name() {
                     self.print_dollar_crate(segment.ident)?;
                 } else {
-                    self.writer().word(segment.ident.as_str().get())?;
+                    self.writer().word(segment.ident.as_str().to_string())?;
                 }
             }
         }
@@ -749,7 +749,7 @@ pub trait PrintState<'a> {
         }
         self.maybe_print_comment(attr.span.lo())?;
         if attr.is_sugared_doc {
-            self.writer().word(attr.value_str().unwrap().as_str().get())?;
+            self.writer().word(attr.value_str().unwrap().as_str().to_string())?;
             self.writer().hardbreak()
         } else {
             match attr.style {
@@ -768,11 +768,11 @@ pub trait PrintState<'a> {
     }
 
     fn print_meta_list_item(&mut self, item: &ast::NestedMetaItem) -> io::Result<()> {
-        match item.node {
-            ast::NestedMetaItemKind::MetaItem(ref mi) => {
+        match item {
+            ast::NestedMetaItem::MetaItem(ref mi) => {
                 self.print_meta_item(mi)
             },
-            ast::NestedMetaItemKind::Literal(ref lit) => {
+            ast::NestedMetaItem::Literal(ref lit) => {
                 self.print_literal(lit)
             }
         }
@@ -781,15 +781,15 @@ pub trait PrintState<'a> {
     fn print_meta_item(&mut self, item: &ast::MetaItem) -> io::Result<()> {
         self.ibox(INDENT_UNIT)?;
         match item.node {
-            ast::MetaItemKind::Word => self.print_attribute_path(&item.ident)?,
+            ast::MetaItemKind::Word => self.print_attribute_path(&item.path)?,
             ast::MetaItemKind::NameValue(ref value) => {
-                self.print_attribute_path(&item.ident)?;
+                self.print_attribute_path(&item.path)?;
                 self.writer().space()?;
                 self.word_space("=")?;
                 self.print_literal(value)?;
             }
             ast::MetaItemKind::List(ref items) => {
-                self.print_attribute_path(&item.ident)?;
+                self.print_attribute_path(&item.path)?;
                 self.popen()?;
                 self.commasep(Consistent,
                               &items[..],
@@ -858,7 +858,7 @@ pub trait PrintState<'a> {
         if !ast::Ident::with_empty_ctxt(name).is_path_segment_keyword() {
             self.writer().word("::")?;
         }
-        self.writer().word(name.as_str().get())
+        self.writer().word(name.as_str().to_string())
     }
 }
 
@@ -1142,7 +1142,7 @@ impl<'a> State<'a> {
             }
             ast::ForeignItemKind::Static(ref t, m) => {
                 self.head(visibility_qualified(&item.vis, "static"))?;
-                if m {
+                if m == ast::Mutability::Mutable {
                     self.word_space("mut")?;
                 }
                 self.print_ident(item.ident)?;
@@ -1263,13 +1263,13 @@ impl<'a> State<'a> {
                 self.s.word(";")?;
                 self.end()?; // end the outer cbox
             }
-            ast::ItemKind::Fn(ref decl, header, ref typarams, ref body) => {
+            ast::ItemKind::Fn(ref decl, header, ref param_names, ref body) => {
                 self.head("")?;
                 self.print_fn(
                     decl,
                     header,
                     Some(item.ident),
-                    typarams,
+                    param_names,
                     &item.vis
                 )?;
                 self.s.word(" ")?;
@@ -1300,7 +1300,7 @@ impl<'a> State<'a> {
             }
             ast::ItemKind::GlobalAsm(ref ga) => {
                 self.head(visibility_qualified(&item.vis, "global_asm!"))?;
-                self.s.word(ga.asm.as_str().get())?;
+                self.s.word(ga.asm.as_str().to_string())?;
                 self.end()?;
             }
             ast::ItemKind::Ty(ref ty, ref generics) => {
@@ -1550,44 +1550,47 @@ impl<'a> State<'a> {
                         print_finalizer: bool) -> io::Result<()> {
         self.print_ident(ident)?;
         self.print_generic_params(&generics.params)?;
-        if !struct_def.is_struct() {
-            if struct_def.is_tuple() {
-                self.popen()?;
-                self.commasep(
-                    Inconsistent, struct_def.fields(),
-                    |s, field| {
-                        s.maybe_print_comment(field.span.lo())?;
-                        s.print_outer_attributes(&field.attrs)?;
-                        s.print_visibility(&field.vis)?;
-                        s.print_type(&field.ty)
-                    }
-                )?;
-                self.pclose()?;
+        match struct_def {
+            ast::VariantData::Tuple(..) | ast::VariantData::Unit(..) => {
+                if let ast::VariantData::Tuple(..) = struct_def {
+                    self.popen()?;
+                    self.commasep(
+                        Inconsistent, struct_def.fields(),
+                        |s, field| {
+                            s.maybe_print_comment(field.span.lo())?;
+                            s.print_outer_attributes(&field.attrs)?;
+                            s.print_visibility(&field.vis)?;
+                            s.print_type(&field.ty)
+                        }
+                    )?;
+                    self.pclose()?;
+                }
+                self.print_where_clause(&generics.where_clause)?;
+                if print_finalizer {
+                    self.s.word(";")?;
+                }
+                self.end()?;
+                self.end() // close the outer-box
             }
-            self.print_where_clause(&generics.where_clause)?;
-            if print_finalizer {
-                self.s.word(";")?;
-            }
-            self.end()?;
-            self.end() // close the outer-box
-        } else {
-            self.print_where_clause(&generics.where_clause)?;
-            self.nbsp()?;
-            self.bopen()?;
-            self.hardbreak_if_not_bol()?;
-
-            for field in struct_def.fields() {
+            ast::VariantData::Struct(..) => {
+                self.print_where_clause(&generics.where_clause)?;
+                self.nbsp()?;
+                self.bopen()?;
                 self.hardbreak_if_not_bol()?;
-                self.maybe_print_comment(field.span.lo())?;
-                self.print_outer_attributes(&field.attrs)?;
-                self.print_visibility(&field.vis)?;
-                self.print_ident(field.ident.unwrap())?;
-                self.word_nbsp(":")?;
-                self.print_type(&field.ty)?;
-                self.s.word(",")?;
-            }
 
-            self.bclose(span)
+                for field in struct_def.fields() {
+                    self.hardbreak_if_not_bol()?;
+                    self.maybe_print_comment(field.span.lo())?;
+                    self.print_outer_attributes(&field.attrs)?;
+                    self.print_visibility(&field.vis)?;
+                    self.print_ident(field.ident.unwrap())?;
+                    self.word_nbsp(":")?;
+                    self.print_type(&field.ty)?;
+                    self.s.word(",")?;
+                }
+
+                self.bclose(span)
+            }
         }
     }
 
@@ -2434,7 +2437,7 @@ impl<'a> State<'a> {
         if ident.is_raw_guess() {
             self.s.word(format!("r#{}", ident))?;
         } else {
-            self.s.word(ident.as_str().get())?;
+            self.s.word(ident.as_str().to_string())?;
         }
         self.ann.post(self, AnnNode::Ident(&ident))
     }
@@ -2444,7 +2447,7 @@ impl<'a> State<'a> {
     }
 
     pub fn print_name(&mut self, name: ast::Name) -> io::Result<()> {
-        self.s.word(name.as_str().get())?;
+        self.s.word(name.as_str().to_string())?;
         self.ann.post(self, AnnNode::Name(&name))
     }
 
@@ -3266,6 +3269,7 @@ mod tests {
             let var = source_map::respan(syntax_pos::DUMMY_SP, ast::Variant_ {
                 ident,
                 attrs: Vec::new(),
+                id: ast::DUMMY_NODE_ID,
                 // making this up as I go.... ?
                 data: ast::VariantData::Unit(ast::DUMMY_NODE_ID),
                 disr_expr: None,

@@ -28,6 +28,15 @@ macro_rules! rtassert {
     })
 }
 
+#[allow(unused_macros)] // not used on all platforms
+macro_rules! rtunwrap {
+    ($ok:ident, $e:expr) => (if let $ok(v) = $e {
+        v
+    } else {
+        rtabort!(concat!("unwrap failed: ", stringify!($e)));
+    })
+}
+
 pub mod alloc;
 pub mod at_exit_imp;
 #[cfg(feature = "backtrace")]
@@ -35,6 +44,13 @@ pub mod backtrace;
 pub mod condvar;
 pub mod io;
 pub mod mutex;
+#[cfg(any(rustdoc, // see `mod os`, docs are generated for multiple platforms
+          unix,
+          target_os = "redox",
+          target_os = "cloudabi",
+          target_arch = "wasm32",
+          all(target_vendor = "fortanix", target_env = "sgx")))]
+pub mod os_str_bytes;
 pub mod poison;
 pub mod remutex;
 pub mod rwlock;
@@ -45,6 +61,7 @@ pub mod util;
 pub mod wtf8;
 pub mod bytestring;
 pub mod process;
+pub mod fs;
 
 cfg_if! {
     if #[cfg(any(target_os = "cloudabi",

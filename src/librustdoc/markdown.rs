@@ -36,7 +36,7 @@ fn extract_leading_metadata<'a>(s: &'a str) -> (Vec<&'a str>, &'a str) {
 
 /// Render `input` (e.g., "foo.md") into an HTML file in `output`
 /// (e.g., output = "bar" => "bar/foo.html").
-pub fn render(input: PathBuf, options: RenderOptions, diag: &errors::Handler) -> isize {
+pub fn render(input: PathBuf, options: RenderOptions, diag: &errors::Handler) -> i32 {
     let mut output = options.output;
     output.push(input.file_stem().unwrap());
     output.set_extension("html");
@@ -126,7 +126,7 @@ pub fn render(input: PathBuf, options: RenderOptions, diag: &errors::Handler) ->
 }
 
 /// Runs any tests/code examples in the markdown file `input`.
-pub fn test(mut options: Options, diag: &errors::Handler) -> isize {
+pub fn test(mut options: Options, diag: &errors::Handler) -> i32 {
     let input_str = match load_string(&options.input, diag) {
         Ok(s) => s,
         Err(LoadStringError::ReadFail) => return 1,
@@ -143,10 +143,9 @@ pub fn test(mut options: Options, diag: &errors::Handler) -> isize {
                                        options.linker, options.edition, options.persist_doctests);
     collector.set_position(DUMMY_SP);
     let codes = ErrorCodes::from(UnstableFeatures::from_environment().is_nightly_build());
-    let res = find_testable_code(&input_str, &mut collector, codes);
-    if let Err(err) = res {
-        diag.span_warn(DUMMY_SP, &err.to_string());
-    }
+
+    find_testable_code(&input_str, &mut collector, codes);
+
     options.test_args.insert(0, "rustdoctest".to_string());
     testing::test_main(&options.test_args, collector.tests,
                        testing::Options::new().display_output(options.display_warnings));

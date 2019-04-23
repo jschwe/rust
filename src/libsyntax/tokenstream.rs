@@ -24,6 +24,7 @@ use syntax_pos::{BytePos, Mark, Span, DUMMY_SP};
 use rustc_data_structures::static_assert;
 use rustc_data_structures::sync::Lrc;
 use serialize::{Decoder, Decodable, Encoder, Encodable};
+use smallvec::{SmallVec, smallvec};
 
 use std::borrow::Cow;
 use std::{fmt, iter, mem};
@@ -178,9 +179,11 @@ impl TokenStream {
             while let Some((pos, ts)) = iter.next() {
                 if let Some((_, next)) = iter.peek() {
                     let sp = match (&ts, &next) {
-                        ((TokenTree::Token(_, token::Token::Comma), NonJoint), _) |
-                        (_, (TokenTree::Token(_, token::Token::Comma), NonJoint)) => continue,
-                        ((TokenTree::Token(sp, _), NonJoint), _) => *sp,
+                        (_, (TokenTree::Token(_, token::Token::Comma), _)) => continue,
+                        ((TokenTree::Token(sp, token_left), NonJoint),
+                         (TokenTree::Token(_, token_right), _))
+                        if (token_left.is_ident() || token_left.is_lit()) &&
+                            (token_right.is_ident() || token_right.is_lit()) => *sp,
                         ((TokenTree::Delimited(sp, ..), NonJoint), _) => sp.entire(),
                         _ => continue,
                     };
@@ -222,7 +225,7 @@ impl From<Token> for TokenStream {
 
 impl<T: Into<TokenStream>> iter::FromIterator<T> for TokenStream {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        TokenStream::from_streams(iter.into_iter().map(Into::into).collect::<Vec<_>>())
+        TokenStream::from_streams(iter.into_iter().map(Into::into).collect::<SmallVec<_>>())
     }
 }
 
@@ -254,7 +257,7 @@ impl TokenStream {
         }
     }
 
-    pub(crate) fn from_streams(mut streams: Vec<TokenStream>) -> TokenStream {
+    pub(crate) fn from_streams(mut streams: SmallVec<[TokenStream; 2]>) -> TokenStream {
         match streams.len() {
             0 => TokenStream::empty(),
             1 => streams.pop().unwrap(),
@@ -391,12 +394,13 @@ impl TokenStream {
     }
 }
 
+// 99.5%+ of the time we have 1 or 2 elements in this vector.
 #[derive(Clone)]
-pub struct TokenStreamBuilder(Vec<TokenStream>);
+pub struct TokenStreamBuilder(SmallVec<[TokenStream; 2]>);
 
 impl TokenStreamBuilder {
     pub fn new() -> TokenStreamBuilder {
-        TokenStreamBuilder(Vec::new())
+        TokenStreamBuilder(SmallVec::new())
     }
 
     pub fn push<T: Into<TokenStream>>(&mut self, stream: T) {
@@ -483,7 +487,7 @@ impl Cursor {
         }
         let index = self.index;
         let stream = mem::replace(&mut self.stream, TokenStream(None));
-        *self = TokenStream::from_streams(vec![stream, new_stream]).into_trees();
+        *self = TokenStream::from_streams(smallvec![stream, new_stream]).into_trees();
         self.index = index;
     }
 
@@ -570,7 +574,7 @@ mod tests {
             let test_res = string_to_ts("foo::bar::baz");
             let test_fst = string_to_ts("foo::bar");
             let test_snd = string_to_ts("::baz");
-            let eq_res = TokenStream::from_streams(vec![test_fst, test_snd]);
+            let eq_res = TokenStream::from_streams(smallvec![test_fst, test_snd]);
             assert_eq!(test_res.trees().count(), 5);
             assert_eq!(eq_res.trees().count(), 5);
             assert_eq!(test_res.eq_unspanned(&eq_res), true);

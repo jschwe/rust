@@ -8,10 +8,12 @@ use crate::ty::TyCtxt;
 use crate::hir::intravisit::{self, NestedVisitorMap, Visitor};
 use syntax::symbol::Symbol;
 use syntax::ast::{Attribute, MetaItem, MetaItemKind};
-use syntax_pos::Span;
+use syntax_pos::{Span, symbols};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
+use rustc_macros::HashStable;
 use errors::DiagnosticId;
 
+#[derive(HashStable)]
 pub struct LibFeatures {
     // A map from feature to stabilisation version.
     pub stable: FxHashMap<Symbol, Symbol>,
@@ -49,12 +51,12 @@ impl<'a, 'tcx> LibFeatureCollector<'a, 'tcx> {
     }
 
     fn extract(&self, attr: &Attribute) -> Option<(Symbol, Option<Symbol>, Span)> {
-        let stab_attrs = vec!["stable", "unstable", "rustc_const_unstable"];
+        let stab_attrs = [symbols::stable, symbols::unstable, symbols::rustc_const_unstable];
 
         // Find a stability attribute (i.e., `#[stable (..)]`, `#[unstable (..)]`,
         // `#[rustc_const_unstable (..)]`).
         if let Some(stab_attr) = stab_attrs.iter().find(|stab_attr| {
-            attr.check_name(stab_attr)
+            attr.check_name(**stab_attr)
         }) {
             let meta_item = attr.meta();
             if let Some(MetaItem { node: MetaItemKind::List(ref metas), .. }) = meta_item {
@@ -63,7 +65,7 @@ impl<'a, 'tcx> LibFeatureCollector<'a, 'tcx> {
                 for meta in metas {
                     if let Some(mi) = meta.meta_item() {
                         // Find the `feature = ".."` meta-item.
-                        match (&*mi.name().as_str(), mi.value_str()) {
+                        match (mi.name_or_empty().get(), mi.value_str()) {
                             ("feature", val) => feature = val,
                             ("since", val) => since = val,
                             _ => {}

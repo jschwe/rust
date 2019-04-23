@@ -48,7 +48,7 @@ pub trait PpAnn {
     fn post(&self, _state: &mut State<'_>, _node: AnnNode<'_>) -> io::Result<()> {
         Ok(())
     }
-    fn try_fetch_item(&self, _: ast::NodeId) -> Option<&hir::Item> {
+    fn try_fetch_item(&self, _: hir::HirId) -> Option<&hir::Item> {
         None
     }
 }
@@ -58,7 +58,7 @@ impl PpAnn for NoAnn {}
 pub const NO_ANN: &dyn PpAnn = &NoAnn;
 
 impl PpAnn for hir::Crate {
-    fn try_fetch_item(&self, item: ast::NodeId) -> Option<&hir::Item> {
+    fn try_fetch_item(&self, item: hir::HirId) -> Option<&hir::Item> {
         Some(self.item(item))
     }
     fn nested(&self, state: &mut State<'_>, nested: Nested) -> io::Result<()> {
@@ -466,7 +466,7 @@ impl<'a> State<'a> {
             }
             hir::ForeignItemKind::Static(ref t, m) => {
                 self.head(visibility_qualified(&item.vis, "static"))?;
-                if m {
+                if m == hir::MutMutable {
                     self.word_space("mut")?;
                 }
                 self.print_ident(item.ident)?;
@@ -591,12 +591,12 @@ impl<'a> State<'a> {
                 self.s.word(";")?;
                 self.end()?; // end the outer cbox
             }
-            hir::ItemKind::Fn(ref decl, header, ref typarams, body) => {
+            hir::ItemKind::Fn(ref decl, header, ref param_names, body) => {
                 self.head("")?;
                 self.print_fn(decl,
                               header,
                               Some(item.ident.name),
-                              typarams,
+                              param_names,
                               &item.vis,
                               &[],
                               Some(body))?;
@@ -622,7 +622,7 @@ impl<'a> State<'a> {
             }
             hir::ItemKind::GlobalAsm(ref ga) => {
                 self.head(visibility_qualified(&item.vis, "global asm"))?;
-                self.s.word(ga.asm.as_str().get())?;
+                self.s.word(ga.asm.as_str().to_string())?;
                 self.end()?
             }
             hir::ItemKind::Ty(ref ty, ref generics) => {
@@ -860,41 +860,44 @@ impl<'a> State<'a> {
                         -> io::Result<()> {
         self.print_name(name)?;
         self.print_generic_params(&generics.params)?;
-        if !struct_def.is_struct() {
-            if struct_def.is_tuple() {
-                self.popen()?;
-                self.commasep(Inconsistent, struct_def.fields(), |s, field| {
-                    s.maybe_print_comment(field.span.lo())?;
-                    s.print_outer_attributes(&field.attrs)?;
-                    s.print_visibility(&field.vis)?;
-                    s.print_type(&field.ty)
-                })?;
-                self.pclose()?;
+        match struct_def {
+            hir::VariantData::Tuple(..) | hir::VariantData::Unit(..) => {
+                if let hir::VariantData::Tuple(..) = struct_def {
+                    self.popen()?;
+                    self.commasep(Inconsistent, struct_def.fields(), |s, field| {
+                        s.maybe_print_comment(field.span.lo())?;
+                        s.print_outer_attributes(&field.attrs)?;
+                        s.print_visibility(&field.vis)?;
+                        s.print_type(&field.ty)
+                    })?;
+                    self.pclose()?;
+                }
+                self.print_where_clause(&generics.where_clause)?;
+                if print_finalizer {
+                    self.s.word(";")?;
+                }
+                self.end()?;
+                self.end() // close the outer-box
             }
-            self.print_where_clause(&generics.where_clause)?;
-            if print_finalizer {
-                self.s.word(";")?;
-            }
-            self.end()?;
-            self.end() // close the outer-box
-        } else {
-            self.print_where_clause(&generics.where_clause)?;
-            self.nbsp()?;
-            self.bopen()?;
-            self.hardbreak_if_not_bol()?;
-
-            for field in struct_def.fields() {
+            hir::VariantData::Struct(..) => {
+                self.print_where_clause(&generics.where_clause)?;
+                self.nbsp()?;
+                self.bopen()?;
                 self.hardbreak_if_not_bol()?;
-                self.maybe_print_comment(field.span.lo())?;
-                self.print_outer_attributes(&field.attrs)?;
-                self.print_visibility(&field.vis)?;
-                self.print_ident(field.ident)?;
-                self.word_nbsp(":")?;
-                self.print_type(&field.ty)?;
-                self.s.word(",")?;
-            }
 
-            self.bclose(span)
+                for field in struct_def.fields() {
+                    self.hardbreak_if_not_bol()?;
+                    self.maybe_print_comment(field.span.lo())?;
+                    self.print_outer_attributes(&field.attrs)?;
+                    self.print_visibility(&field.vis)?;
+                    self.print_ident(field.ident)?;
+                    self.word_nbsp(":")?;
+                    self.print_type(&field.ty)?;
+                    self.s.word(",")?;
+                }
+
+                self.bclose(span)
+            }
         }
     }
 
@@ -1588,7 +1591,7 @@ impl<'a> State<'a> {
         if ident.is_raw_guess() {
             self.s.word(format!("r#{}", ident.name))?;
         } else {
-            self.s.word(ident.as_str().get())?;
+            self.s.word(ident.as_str().to_string())?;
         }
         self.ann.post(self, AnnNode::Name(&ident.name))
     }
@@ -1765,7 +1768,7 @@ impl<'a> State<'a> {
         // is that it doesn't matter
         match pat.node {
             PatKind::Wild => self.s.word("_")?,
-            PatKind::Binding(binding_mode, _, _, ident, ref sub) => {
+            PatKind::Binding(binding_mode, _, ident, ref sub) => {
                 match binding_mode {
                     hir::BindingAnnotation::Ref => {
                         self.word_nbsp("ref")?;
@@ -1995,7 +1998,7 @@ impl<'a> State<'a> {
         self.commasep(Inconsistent, &decl.inputs, |s, ty| {
             s.ibox(indent_unit)?;
             if let Some(arg_name) = arg_names.get(i) {
-                s.s.word(arg_name.as_str().get())?;
+                s.s.word(arg_name.as_str().to_string())?;
                 s.s.word(":")?;
                 s.s.space()?;
             } else if let Some(body_id) = body_id {

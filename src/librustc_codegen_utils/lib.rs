@@ -4,6 +4,7 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
 
+#![feature(arbitrary_self_types)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(custom_attribute)]
@@ -15,10 +16,10 @@
 #![recursion_limit="256"]
 
 #![deny(rust_2018_idioms)]
+#![deny(internal)]
 
 #[macro_use]
 extern crate rustc;
-#[macro_use] extern crate rustc_data_structures;
 
 use rustc::ty::TyCtxt;
 use rustc::hir::def_id::LOCAL_CRATE;

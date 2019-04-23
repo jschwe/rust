@@ -2,7 +2,7 @@
 
 #[macro_export]
 macro_rules! err {
-    ($($tt:tt)*) => { Err($crate::mir::interpret::EvalErrorKind::$($tt)*.into()) };
+    ($($tt:tt)*) => { Err($crate::mir::interpret::InterpError::$($tt)*.into()) };
 }
 
 mod error;
@@ -11,7 +11,7 @@ mod allocation;
 mod pointer;
 
 pub use self::error::{
-    EvalError, EvalResult, EvalErrorKind, AssertMessage, ConstEvalErr, struct_error,
+    EvalError, EvalResult, InterpError, AssertMessage, ConstEvalErr, struct_error,
     FrameInfo, ConstEvalRawResult, ConstEvalResult, ErrorHandled,
 };
 
@@ -34,13 +34,14 @@ use crate::rustc_serialize::{Encoder, Decodable, Encodable};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::{Lock as Mutex, HashMapExt};
 use rustc_data_structures::tiny_list::TinyList;
+use rustc_macros::HashStable;
 use byteorder::{WriteBytesExt, ReadBytesExt, LittleEndian, BigEndian};
 use crate::ty::codec::TyDecoder;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::num::NonZeroU32;
 
 /// Uniquely identifies a specific constant or static.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, RustcEncodable, RustcDecodable, HashStable)]
 pub struct GlobalId<'tcx> {
     /// For a constant or static, the `Instance` of the item itself.
     /// For a promoted global, the `Instance` of the function they belong to.
@@ -258,7 +259,7 @@ impl fmt::Display for AllocId {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, RustcDecodable, RustcEncodable)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, RustcDecodable, RustcEncodable, HashStable)]
 pub enum AllocKind<'tcx> {
     /// The alloc ID is used as a function pointer
     Function(Instance<'tcx>),
@@ -343,7 +344,7 @@ impl<'tcx> AllocMap<'tcx> {
         }
     }
 
-    /// Returns `None` in case the `AllocId` is dangling. An `EvalContext` can still have a
+    /// Returns `None` in case the `AllocId` is dangling. An `InterpretCx` can still have a
     /// local `Allocation` for that `AllocId`, but having such an `AllocId` in a constant is
     /// illegal and will likely ICE.
     /// This function exists to allow const eval to detect the difference between evaluation-

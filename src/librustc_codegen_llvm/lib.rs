@@ -15,16 +15,16 @@
 #![allow(unused_attributes)]
 #![feature(libc)]
 #![feature(nll)]
-#![feature(range_contains)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(optin_builtin_traits)]
 #![feature(concat_idents)]
 #![feature(link_args)]
 #![feature(static_nobundle)]
+#![feature(trusted_len)]
 #![deny(rust_2018_idioms)]
 #![allow(explicit_outlives_requirements)]
 
-use back::write::create_target_machine;
+use back::write::{create_target_machine, create_informational_target_machine};
 use syntax_pos::symbol::Symbol;
 
 extern crate flate2;
@@ -44,8 +44,6 @@ extern crate rustc_fs_util;
 #[macro_use] extern crate syntax;
 extern crate syntax_pos;
 extern crate rustc_errors as errors;
-extern crate serialize;
-extern crate tempfile;
 
 use rustc_codegen_ssa::traits::*;
 use rustc_codegen_ssa::back::write::{CodegenContext, ModuleConfig, FatLTOInput};
@@ -53,7 +51,6 @@ use rustc_codegen_ssa::back::lto::{SerializedModule, LtoModuleCodegen, ThinModul
 use rustc_codegen_ssa::CompiledModule;
 use errors::{FatalError, Handler};
 use rustc::dep_graph::WorkProduct;
-use rustc::util::time_graph::Timeline;
 use syntax_pos::symbol::InternedString;
 use rustc::mir::mono::Stats;
 pub use llvm_util::target_features;
@@ -63,25 +60,21 @@ use std::sync::{mpsc, Arc};
 use rustc::dep_graph::DepGraph;
 use rustc::middle::allocator::AllocatorKind;
 use rustc::middle::cstore::{EncodedMetadata, MetadataLoader};
-use rustc::session::{Session, CompileIncomplete};
+use rustc::session::Session;
 use rustc::session::config::{OutputFilenames, OutputType, PrintRequest, OptLevel};
 use rustc::ty::{self, TyCtxt};
-use rustc::util::time_graph;
-use rustc::util::profiling::ProfileCategory;
+use rustc::util::common::ErrorReported;
 use rustc_mir::monomorphize;
 use rustc_codegen_ssa::ModuleCodegen;
 use rustc_codegen_utils::codegen_backend::CodegenBackend;
 
-mod diagnostics;
+mod error_codes;
 
 mod back {
-    mod archive;
+    pub mod archive;
     pub mod bytecode;
-    pub mod link;
     pub mod lto;
     pub mod write;
-    mod rpath;
-    pub mod wasm;
 }
 
 mod abi;
@@ -114,8 +107,9 @@ pub struct LlvmCodegenBackend(());
 
 impl ExtraBackendMethods for LlvmCodegenBackend {
     fn new_metadata(&self, tcx: TyCtxt<'_, '_, '_>, mod_name: &str) -> ModuleLlvm {
-        ModuleLlvm::new(tcx, mod_name)
+        ModuleLlvm::new_metadata(tcx, mod_name)
     }
+
     fn write_metadata<'b, 'gcx>(
         &self,
         tcx: TyCtxt<'b, 'gcx, 'gcx>,
@@ -123,9 +117,9 @@ impl ExtraBackendMethods for LlvmCodegenBackend {
     ) -> EncodedMetadata {
         base::write_metadata(tcx, metadata)
     }
-    fn codegen_allocator(
+    fn codegen_allocator<'b, 'gcx>(
         &self,
-        tcx: TyCtxt<'_, '_, '_>,
+        tcx: TyCtxt<'b, 'gcx, 'gcx>,
         mods: &mut ModuleLlvm,
         kind: AllocatorKind
     ) {
@@ -166,42 +160,37 @@ impl WriteBackendMethods for LlvmCodegenBackend {
         cgcx: &CodegenContext<Self>,
         modules: Vec<FatLTOInput<Self>>,
         cached_modules: Vec<(SerializedModule<Self::ModuleBuffer>, WorkProduct)>,
-        timeline: &mut Timeline
     ) -> Result<LtoModuleCodegen<Self>, FatalError> {
-        back::lto::run_fat(cgcx, modules, cached_modules, timeline)
+        back::lto::run_fat(cgcx, modules, cached_modules)
     }
     fn run_thin_lto(
         cgcx: &CodegenContext<Self>,
         modules: Vec<(String, Self::ThinBuffer)>,
         cached_modules: Vec<(SerializedModule<Self::ModuleBuffer>, WorkProduct)>,
-        timeline: &mut Timeline
     ) -> Result<(Vec<LtoModuleCodegen<Self>>, Vec<WorkProduct>), FatalError> {
-        back::lto::run_thin(cgcx, modules, cached_modules, timeline)
+        back::lto::run_thin(cgcx, modules, cached_modules)
     }
     unsafe fn optimize(
         cgcx: &CodegenContext<Self>,
         diag_handler: &Handler,
         module: &ModuleCodegen<Self::Module>,
         config: &ModuleConfig,
-        timeline: &mut Timeline
     ) -> Result<(), FatalError> {
-        back::write::optimize(cgcx, diag_handler, module, config, timeline)
+        back::write::optimize(cgcx, diag_handler, module, config)
     }
     unsafe fn optimize_thin(
         cgcx: &CodegenContext<Self>,
         thin: &mut ThinModule<Self>,
-        timeline: &mut Timeline
     ) -> Result<ModuleCodegen<Self::Module>, FatalError> {
-        back::lto::optimize_thin_module(thin, cgcx, timeline)
+        back::lto::optimize_thin_module(thin, cgcx)
     }
     unsafe fn codegen(
         cgcx: &CodegenContext<Self>,
         diag_handler: &Handler,
         module: ModuleCodegen<Self::Module>,
         config: &ModuleConfig,
-        timeline: &mut Timeline
     ) -> Result<CompiledModule, FatalError> {
-        back::write::codegen(cgcx, diag_handler, module, config, timeline)
+        back::write::codegen(cgcx, diag_handler, module, config)
     }
     fn prepare_thin(
         module: ModuleCodegen<Self::Module>
@@ -311,7 +300,7 @@ impl CodegenBackend for LlvmCodegenBackend {
         sess: &Session,
         dep_graph: &DepGraph,
         outputs: &OutputFilenames,
-    ) -> Result<(), CompileIncomplete>{
+    ) -> Result<(), ErrorReported>{
         use rustc::util::common::time;
         let (codegen_results, work_products) =
             ongoing_codegen.downcast::
@@ -335,12 +324,21 @@ impl CodegenBackend for LlvmCodegenBackend {
 
         // Run the linker on any artifacts that resulted from the LLVM run.
         // This should produce either a finished executable or library.
-        sess.profiler(|p| p.start_activity(ProfileCategory::Linking));
+        sess.profiler(|p| p.start_activity("link_crate"));
         time(sess, "linking", || {
-            back::link::link_binary(sess, &codegen_results,
-                                    outputs, &codegen_results.crate_name.as_str());
+            use rustc_codegen_ssa::back::link::link_binary;
+            use crate::back::archive::LlvmArchiveBuilder;
+
+            let target_cpu = crate::llvm_util::target_cpu(sess);
+            link_binary::<LlvmArchiveBuilder<'_>>(
+                sess,
+                &codegen_results,
+                outputs,
+                &codegen_results.crate_name.as_str(),
+                target_cpu,
+            );
         });
-        sess.profiler(|p| p.end_activity(ProfileCategory::Linking));
+        sess.profiler(|p| p.end_activity("link_crate"));
 
         // Now that we won't touch anything in the incremental compilation directory
         // any more, we can finalize it (which involves renaming it)
@@ -370,11 +368,22 @@ impl ModuleLlvm {
         unsafe {
             let llcx = llvm::LLVMRustContextCreate(tcx.sess.fewer_names());
             let llmod_raw = context::create_module(tcx, llcx, mod_name) as *const _;
-
             ModuleLlvm {
                 llmod_raw,
                 llcx,
                 tm: create_target_machine(tcx, false),
+            }
+        }
+    }
+
+    fn new_metadata(tcx: TyCtxt<'_, '_, '_>, mod_name: &str) -> Self {
+        unsafe {
+            let llcx = llvm::LLVMRustContextCreate(tcx.sess.fewer_names());
+            let llmod_raw = context::create_module(tcx, llcx, mod_name) as *const _;
+            ModuleLlvm {
+                llmod_raw,
+                llcx,
+                tm: create_informational_target_machine(&tcx.sess, false),
             }
         }
     }

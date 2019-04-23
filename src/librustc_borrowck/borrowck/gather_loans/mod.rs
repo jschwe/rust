@@ -14,7 +14,6 @@ use rustc::middle::mem_categorization::Categorization;
 use rustc::middle::region;
 use rustc::ty::{self, TyCtxt};
 
-use syntax::ast;
 use syntax_pos::Span;
 use rustc::hir;
 use log::debug;
@@ -141,8 +140,7 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for GatherLoanCtxt<'a, 'tcx> {
               assignee_cmt: &mc::cmt_<'tcx>,
               _: euv::MutateMode)
     {
-        let node_id = self.bccx.tcx.hir().hir_to_node_id(assignment_id);
-        self.guarantee_assignment_valid(node_id,
+        self.guarantee_assignment_valid(assignment_id,
                                         assignment_span,
                                         assignee_cmt);
     }
@@ -152,6 +150,24 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for GatherLoanCtxt<'a, 'tcx> {
                      .tables
                      .node_type(id);
         gather_moves::gather_decl(self.bccx, &self.move_data, id, ty);
+    }
+
+    fn nested_body(&mut self, body_id: hir::BodyId) {
+        debug!("nested_body(body_id={:?})", body_id);
+        // rust-lang/rust#58776: MIR and AST borrow check disagree on where
+        // certain closure errors are reported. As such migrate borrowck has to
+        // operate at the level of items, rather than bodies. Check if the
+        // contained closure had any errors and set `signalled_any_error` if it
+        // has.
+        let bccx = self.bccx;
+        if bccx.tcx.migrate_borrowck() {
+            if let SignalledError::NoErrorsSeen = bccx.signalled_any_error.get() {
+                let closure_def_id = bccx.tcx.hir().body_owner_def_id(body_id);
+                debug!("checking closure: {:?}", closure_def_id);
+
+                bccx.signalled_any_error.set(bccx.tcx.borrowck(closure_def_id).signalled_any_error);
+            }
+        }
     }
 }
 
@@ -238,7 +254,7 @@ impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
 
     /// Guarantees that `cmt` is assignable, or reports an error.
     fn guarantee_assignment_valid(&mut self,
-                                  assignment_id: ast::NodeId,
+                                  assignment_id: hir::HirId,
                                   assignment_span: Span,
                                   cmt: &mc::cmt_<'tcx>) {
 
@@ -272,8 +288,7 @@ impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
                     self.mark_loan_path_as_mutated(&lp);
                 }
                 gather_moves::gather_assignment(self.bccx, &self.move_data,
-                                                self.bccx.tcx.hir().node_to_hir_id(assignment_id)
-                                                    .local_id,
+                                                assignment_id.local_id,
                                                 assignment_span,
                                                 lp);
             }

@@ -1,6 +1,7 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![feature(box_patterns)]
+#![feature(drain_filter)]
 #![feature(libc)]
 #![feature(nll)]
 #![feature(proc_macro_internals)]
@@ -13,6 +14,7 @@
 #![recursion_limit="256"]
 
 #![deny(rust_2018_idioms)]
+#![deny(internal)]
 
 extern crate libc;
 #[allow(unused_extern_crates)]
@@ -24,7 +26,7 @@ extern crate rustc;
 #[macro_use]
 extern crate rustc_data_structures;
 
-mod diagnostics;
+mod error_codes;
 
 mod index_builder;
 mod index;

@@ -4,6 +4,7 @@ use rustc_data_structures::bit_set::{BitSet, BitSetOperator, HybridBitSet};
 use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::work_queue::WorkQueue;
 
+use rustc::hir::def_id::DefId;
 use rustc::ty::{self, TyCtxt};
 use rustc::mir::{self, Mir, BasicBlock, BasicBlockData, Location, Statement, Terminator};
 use rustc::mir::traversal;
@@ -32,13 +33,18 @@ mod graphviz;
 mod impls;
 pub mod move_paths;
 
-pub(crate) use self::move_paths::indexes;
+pub(crate) mod indexes {
+    pub(crate) use super::{
+        move_paths::{MovePathIndex, MoveOutIndex, InitIndex},
+        impls::borrows::BorrowIndex,
+    };
+}
 
 pub(crate) struct DataflowBuilder<'a, 'tcx: 'a, BD>
 where
     BD: BitDenotation<'tcx>
 {
-    node_id: ast::NodeId,
+    def_id: DefId,
     flow_state: DataflowAnalysis<'a, 'tcx, BD>,
     print_preflow_to: Option<String>,
     print_postflow_to: Option<String>,
@@ -116,7 +122,7 @@ pub struct MoveDataParamEnv<'gcx, 'tcx> {
 
 pub(crate) fn do_dataflow<'a, 'gcx, 'tcx, BD, P>(tcx: TyCtxt<'a, 'gcx, 'tcx>,
                                                  mir: &'a Mir<'tcx>,
-                                                 node_id: ast::NodeId,
+                                                 def_id: DefId,
                                                  attributes: &[ast::Attribute],
                                                  dead_unwinds: &BitSet<BasicBlock>,
                                                  bd: BD,
@@ -126,14 +132,14 @@ pub(crate) fn do_dataflow<'a, 'gcx, 'tcx, BD, P>(tcx: TyCtxt<'a, 'gcx, 'tcx>,
           P: Fn(&BD, BD::Idx) -> DebugFormatted
 {
     let flow_state = DataflowAnalysis::new(mir, dead_unwinds, bd);
-    flow_state.run(tcx, node_id, attributes, p)
+    flow_state.run(tcx, def_id, attributes, p)
 }
 
 impl<'a, 'gcx: 'tcx, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD> where BD: BitDenotation<'tcx>
 {
     pub(crate) fn run<P>(self,
                          tcx: TyCtxt<'a, 'gcx, 'tcx>,
-                         node_id: ast::NodeId,
+                         def_id: DefId,
                          attributes: &[ast::Attribute],
                          p: P) -> DataflowResults<'tcx, BD>
         where P: Fn(&BD, BD::Idx) -> DebugFormatted
@@ -145,7 +151,7 @@ impl<'a, 'gcx: 'tcx, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD> where BD: BitD
                 } else {
                     sess.span_err(
                         item.span,
-                        &format!("{} attribute requires a path", item.ident));
+                        &format!("{} attribute requires a path", item.path));
                     return None;
                 }
             }
@@ -158,7 +164,7 @@ impl<'a, 'gcx: 'tcx, 'tcx: 'a, BD> DataflowAnalysis<'a, 'tcx, BD> where BD: BitD
             name_found(tcx.sess, attributes, "borrowck_graphviz_postflow");
 
         let mut mbcx = DataflowBuilder {
-            node_id,
+            def_id,
             print_preflow_to, print_postflow_to, flow_state: self,
         };
 

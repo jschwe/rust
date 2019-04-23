@@ -16,6 +16,7 @@ use crate::session::Session;
 use crate::util::nodemap::{DefIdMap, FxHashMap, FxHashSet, HirIdMap, HirIdSet};
 use errors::{Applicability, DiagnosticBuilder};
 use rustc_data_structures::sync::Lrc;
+use rustc_macros::HashStable;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::mem::replace;
@@ -31,7 +32,7 @@ use crate::hir::{self, GenericParamKind, LifetimeParamKind};
 /// The origin of a named lifetime definition.
 ///
 /// This is used to prevent the usage of in-band lifetimes in `Fn`/`fn` syntax.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub enum LifetimeDefOrigin {
     // Explicit binders like `fn foo<'a>(x: &'a u8)` or elided like `impl Foo<&u32>`
     ExplicitOrElided,
@@ -62,7 +63,7 @@ pub enum LifetimeUseSet<'tcx> {
     Many,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub enum Region {
     Static,
     EarlyBound(
@@ -161,7 +162,7 @@ impl Region {
 /// A set containing, at most, one known element.
 /// If two distinct values are inserted into a set, then it
 /// becomes `Many`, which can be used to detect ambiguities.
-#[derive(Copy, Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub enum Set1<T> {
     Empty,
     One(T),
@@ -637,7 +638,8 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                 // `abstract type MyAnonTy<'b>: MyTrait<'b>;`
                 //                          ^            ^ this gets resolved in the scope of
                 //                                         the exist_ty generics
-                let (generics, bounds) = match self.tcx.hir().expect_item(item_id.id).node {
+                let (generics, bounds) = match self.tcx.hir().expect_item_by_hir_id(item_id.id).node
+                {
                     // named existential types are reached via TyKind::Path
                     // this arm is for `impl Trait` in the types of statics, constants and locals
                     hir::ItemKind::Existential(hir::ExistTy {
@@ -677,8 +679,8 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                                 let parent_impl_id = hir::ImplItemId { hir_id: parent_id };
                                 let parent_trait_id = hir::TraitItemId { hir_id: parent_id };
                                 let krate = self.tcx.hir().forest.krate();
-                                let parent_node_id = self.tcx.hir().hir_to_node_id(parent_id);
-                                if !(krate.items.contains_key(&parent_node_id)
+
+                                if !(krate.items.contains_key(&parent_id)
                                     || krate.impl_items.contains_key(&parent_impl_id)
                                     || krate.trait_items.contains_key(&parent_trait_id))
                                 {
@@ -1585,9 +1587,9 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
 
             match lifetimeuseset {
                 Some(LifetimeUseSet::One(lifetime)) => {
-                    let node_id = self.tcx.hir().as_local_node_id(def_id).unwrap();
-                    debug!("node id first={:?}", node_id);
-                    if let Some((id, span, name)) = match self.tcx.hir().get(node_id) {
+                    let hir_id = self.tcx.hir().as_local_hir_id(def_id).unwrap();
+                    debug!("hir id first={:?}", hir_id);
+                    if let Some((id, span, name)) = match self.tcx.hir().get_by_hir_id(hir_id) {
                         Node::Lifetime(hir_lifetime) => Some((
                             hir_lifetime.hir_id,
                             hir_lifetime.span,
@@ -1626,8 +1628,8 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                     debug!("Not one use lifetime");
                 }
                 None => {
-                    let node_id = self.tcx.hir().as_local_node_id(def_id).unwrap();
-                    if let Some((id, span, name)) = match self.tcx.hir().get(node_id) {
+                    let hir_id = self.tcx.hir().as_local_hir_id(def_id).unwrap();
+                    if let Some((id, span, name)) = match self.tcx.hir().get_by_hir_id(hir_id) {
                         Node::Lifetime(hir_lifetime) => Some((
                             hir_lifetime.hir_id,
                             hir_lifetime.span,
@@ -1974,7 +1976,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                                     object_lifetime_default,
                                     ..
                                 } => Some(object_lifetime_default),
-                                GenericParamDefKind::Lifetime => None,
+                                GenericParamDefKind::Lifetime | GenericParamDefKind::Const => None,
                             })
                             .collect()
                     })
@@ -2298,6 +2300,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         let span = lifetime_refs[0].span;
         let mut late_depth = 0;
         let mut scope = self.scope;
+        let mut lifetime_names = FxHashSet::default();
         let error = loop {
             match *scope {
                 // Do not assign any resolution, it will be inferred.
@@ -2305,12 +2308,18 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
 
                 Scope::Root => break None,
 
-                Scope::Binder { s, .. } => {
+                Scope::Binder { s, ref lifetimes, .. } => {
+                    // collect named lifetimes for suggestions
+                    for name in lifetimes.keys() {
+                        if let hir::ParamName::Plain(name) = name {
+                            lifetime_names.insert(*name);
+                        }
+                    }
                     late_depth += 1;
                     scope = s;
                 }
 
-                Scope::Elision { ref elide, .. } => {
+                Scope::Elision { ref elide, ref s, .. } => {
                     let lifetime = match *elide {
                         Elide::FreshLateAnon(ref counter) => {
                             for lifetime_ref in lifetime_refs {
@@ -2320,7 +2329,17 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                             return;
                         }
                         Elide::Exact(l) => l.shifted(late_depth),
-                        Elide::Error(ref e) => break Some(e),
+                        Elide::Error(ref e) => {
+                            if let Scope::Binder { ref lifetimes, .. } = s {
+                                // collect named lifetimes for suggestions
+                                for name in lifetimes.keys() {
+                                    if let hir::ParamName::Plain(name) = name {
+                                        lifetime_names.insert(*name);
+                                    }
+                                }
+                            }
+                            break Some(e);
+                        }
                     };
                     for lifetime_ref in lifetime_refs {
                         self.insert_lifetime(lifetime_ref, lifetime);
@@ -2343,7 +2362,13 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
             }
         }
         if add_label {
-            add_missing_lifetime_specifiers_label(&mut err, span, lifetime_refs.len());
+            add_missing_lifetime_specifiers_label(
+                &mut err,
+                span,
+                lifetime_refs.len(),
+                &lifetime_names,
+                self.tcx.sess.source_map().span_to_snippet(span).ok().as_ref().map(|s| s.as_str()),
+            );
         }
 
         err.emit();
@@ -2866,7 +2891,7 @@ fn insert_late_bound_lifetimes(
     }
 }
 
-fn report_missing_lifetime_specifiers(
+pub fn report_missing_lifetime_specifiers(
     sess: &Session,
     span: Span,
     count: usize,
@@ -2884,10 +2909,23 @@ fn add_missing_lifetime_specifiers_label(
     err: &mut DiagnosticBuilder<'_>,
     span: Span,
     count: usize,
+    lifetime_names: &FxHashSet<ast::Ident>,
+    snippet: Option<&str>,
 ) {
     if count > 1 {
         err.span_label(span, format!("expected {} lifetime parameters", count));
+    } else if let (1, Some(name), Some("&")) = (
+        lifetime_names.len(),
+        lifetime_names.iter().next(),
+        snippet,
+    ) {
+        err.span_suggestion(
+            span,
+            "consider using the named lifetime",
+            format!("&{} ", name),
+            Applicability::MaybeIncorrect,
+        );
     } else {
         err.span_label(span, "expected lifetime parameter");
-    };
+    }
 }

@@ -187,6 +187,7 @@ pub struct CrateRoot {
     pub has_default_lib_allocator: bool,
     pub plugin_registrar_fn: Option<DefIndex>,
     pub proc_macro_decls_static: Option<DefIndex>,
+    pub proc_macro_stability: Option<attr::Stability>,
 
     pub crate_deps: LazySeq<CrateDep>,
     pub dylib_dependency_formats: LazySeq<Option<LinkagePreference>>,
@@ -298,6 +299,8 @@ pub enum EntryKind<'tcx> {
     ForeignType,
     GlobalAsm,
     Type,
+    TypeParam,
+    ConstParam,
     Existential,
     Enum(ReprOptions),
     Field,
@@ -334,7 +337,9 @@ impl<'a, 'gcx> HashStable<StableHashingContext<'a>> for EntryKind<'gcx> {
             EntryKind::ForeignType      |
             EntryKind::Field |
             EntryKind::Existential |
-            EntryKind::Type => {
+            EntryKind::Type |
+            EntryKind::TypeParam |
+            EntryKind::ConstParam => {
                 // Nothing else to hash here.
             }
             EntryKind::Const(qualif, ref const_data) => {
@@ -418,7 +423,7 @@ impl<'a> HashStable<StableHashingContext<'a>> for RenderedConst {
 
 #[derive(RustcEncodable, RustcDecodable)]
 pub struct ModData {
-    pub reexports: LazySeq<def::Export>,
+    pub reexports: LazySeq<def::Export<hir::HirId>>,
 }
 
 impl_stable_hash_for!(struct ModData { reexports });
@@ -444,11 +449,8 @@ impl_stable_hash_for!(struct FnData<'tcx> { constness, arg_names, sig });
 pub struct VariantData<'tcx> {
     pub ctor_kind: CtorKind,
     pub discr: ty::VariantDiscr,
-
-    /// If this is a struct's only variant, this
-    /// is the index of the "struct ctor" item.
-    pub struct_ctor: Option<DefIndex>,
-
+    /// If this is unit or tuple-variant/struct, then this is the index of the ctor id.
+    pub ctor: Option<DefIndex>,
     /// If this is a tuple struct or variant
     /// ctor, this is its "function" signature.
     pub ctor_sig: Option<Lazy<ty::PolyFnSig<'tcx>>>,
@@ -457,7 +459,7 @@ pub struct VariantData<'tcx> {
 impl_stable_hash_for!(struct VariantData<'tcx> {
     ctor_kind,
     discr,
-    struct_ctor,
+    ctor,
     ctor_sig
 });
 

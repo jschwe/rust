@@ -8,14 +8,13 @@ use rustc::hir;
 use rustc::hir::def_id::{DefId, DefIndex};
 use rustc::hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc::infer::InferCtxt;
-use rustc::ty::adjustment::{Adjust, Adjustment};
+use rustc::ty::adjustment::{Adjust, Adjustment, PointerCast};
 use rustc::ty::fold::{BottomUpFolder, TypeFoldable, TypeFolder};
 use rustc::ty::subst::UnpackedKind;
 use rustc::ty::{self, Ty, TyCtxt};
 use rustc::util::nodemap::DefIdSet;
 use rustc_data_structures::sync::Lrc;
 use std::mem;
-use syntax::ast;
 use syntax_pos::Span;
 
 ///////////////////////////////////////////////////////////////////////////
@@ -50,7 +49,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         wbcx.visit_liberated_fn_sigs();
         wbcx.visit_fru_field_types();
         wbcx.visit_opaque_types(body.value.span);
-        wbcx.visit_cast_types();
+        wbcx.visit_coercion_casts();
         wbcx.visit_free_region_map();
         wbcx.visit_user_provided_tys();
         wbcx.visit_user_provided_sigs();
@@ -198,7 +197,7 @@ impl<'cx, 'gcx, 'tcx> WritebackCx<'cx, 'gcx, 'tcx> {
                             // Since this is "after" the other adjustment to be
                             // discarded, we do an extra `pop()`
                             Some(Adjustment {
-                                kind: Adjust::Unsize,
+                                kind: Adjust::Pointer(PointerCast::Unsize),
                                 ..
                             }) => {
                                 // So the borrow discard actually happens here
@@ -355,19 +354,13 @@ impl<'cx, 'gcx, 'tcx> WritebackCx<'cx, 'gcx, 'tcx> {
         }
     }
 
-    fn visit_cast_types(&mut self) {
+    fn visit_coercion_casts(&mut self) {
         let fcx_tables = self.fcx.tables.borrow();
-        let fcx_cast_kinds = fcx_tables.cast_kinds();
+        let fcx_coercion_casts = fcx_tables.coercion_casts();
         debug_assert_eq!(fcx_tables.local_id_root, self.tables.local_id_root);
-        let mut self_cast_kinds = self.tables.cast_kinds_mut();
-        let common_local_id_root = fcx_tables.local_id_root.unwrap();
 
-        for (&local_id, &cast_kind) in fcx_cast_kinds.iter() {
-            let hir_id = hir::HirId {
-                owner: common_local_id_root.index,
-                local_id,
-            };
-            self_cast_kinds.insert(hir_id, cast_kind);
+        for local_id in fcx_coercion_casts {
+            self.tables.set_coercion_cast(*local_id);
         }
     }
 
@@ -450,8 +443,8 @@ impl<'cx, 'gcx, 'tcx> WritebackCx<'cx, 'gcx, 'tcx> {
 
     fn visit_opaque_types(&mut self, span: Span) {
         for (&def_id, opaque_defn) in self.fcx.opaque_types.borrow().iter() {
-            let node_id = self.tcx().hir().as_local_node_id(def_id).unwrap();
-            let instantiated_ty = self.resolve(&opaque_defn.concrete_ty, &node_id);
+            let hir_id = self.tcx().hir().as_local_hir_id(def_id).unwrap();
+            let instantiated_ty = self.resolve(&opaque_defn.concrete_ty, &hir_id);
 
             let generics = self.tcx().generics_of(def_id);
 
@@ -478,7 +471,7 @@ impl<'cx, 'gcx, 'tcx> WritebackCx<'cx, 'gcx, 'tcx> {
                 instantiated_ty.fold_with(&mut BottomUpFolder {
                     tcx: self.tcx().global_tcx(),
                     fldop: |ty| {
-                        trace!("checking type {:?}: {:#?}", ty, ty.sty);
+                        trace!("checking type {:?}", ty);
                         // find a type parameter
                         if let ty::Param(..) = ty.sty {
                             // look it up in the substitution list
@@ -734,12 +727,6 @@ trait Locatable {
 impl Locatable for Span {
     fn to_span(&self, _: &TyCtxt<'_, '_, '_>) -> Span {
         *self
-    }
-}
-
-impl Locatable for ast::NodeId {
-    fn to_span(&self, tcx: &TyCtxt<'_, '_, '_>) -> Span {
-        tcx.hir().span(*self)
     }
 }
 

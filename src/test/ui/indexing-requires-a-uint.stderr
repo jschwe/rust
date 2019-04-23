@@ -1,7 +1,7 @@
 error[E0277]: the type `[{integer}]` cannot be indexed by `u8`
   --> $DIR/indexing-requires-a-uint.rs:6:5
    |
-LL |     [0][0u8]; //~ ERROR: the type `[{integer}]` cannot be indexed by `u8`
+LL |     [0][0u8];
    |     ^^^^^^^^ slice indices are of type `usize` or ranges of `usize`
    |
    = help: the trait `std::slice::SliceIndex<[{integer}]>` is not implemented for `u8`
@@ -15,5 +15,5 @@ LL |     bar::<isize>(i);  // i should not be re-coerced back to an isize
 
 error: aborting due to 2 previous errors
 
-Some errors occurred: E0277, E0308.
+Some errors have detailed explanations: E0277, E0308.
 For more information about an error, try `rustc --explain E0277`.

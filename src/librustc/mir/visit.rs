@@ -137,7 +137,7 @@ macro_rules! make_mir_visitor {
             fn visit_ascribe_user_ty(&mut self,
                                      place: & $($mutability)? Place<'tcx>,
                                      variance: & $($mutability)? ty::Variance,
-                                     user_ty: & $($mutability)? UserTypeProjection<'tcx>,
+                                     user_ty: & $($mutability)? UserTypeProjection,
                                      location: Location) {
                 self.super_ascribe_user_ty(place, variance, user_ty, location);
             }
@@ -154,13 +154,6 @@ macro_rules! make_mir_visitor {
                             context: PlaceContext<'tcx>,
                             location: Location) {
                 self.super_place(place, context, location);
-            }
-
-            fn visit_static(&mut self,
-                            static_: & $($mutability)? Static<'tcx>,
-                            context: PlaceContext<'tcx>,
-                            location: Location) {
-                self.super_static(static_, context, location);
             }
 
             fn visit_projection(&mut self,
@@ -212,7 +205,7 @@ macro_rules! make_mir_visitor {
 
             fn visit_user_type_projection(
                 &mut self,
-                ty: & $($mutability)? UserTypeProjection<'tcx>,
+                ty: & $($mutability)? UserTypeProjection,
             ) {
                 self.super_user_type_projection(ty);
             }
@@ -232,7 +225,7 @@ macro_rules! make_mir_visitor {
             }
 
             fn visit_const(&mut self,
-                           constant: & $($mutability)? &'tcx ty::LazyConst<'tcx>,
+                           constant: & $($mutability)? &'tcx ty::Const<'tcx>,
                            _: Location) {
                 self.super_const(constant);
             }
@@ -398,15 +391,15 @@ macro_rules! make_mir_visitor {
                             location
                         );
                     }
-                    StatementKind::InlineAsm { outputs, inputs, asm: _ } => {
-                        for output in & $($mutability)? outputs[..] {
+                    StatementKind::InlineAsm(asm) => {
+                        for output in & $($mutability)? asm.outputs[..] {
                             self.visit_place(
                                 output,
                                 PlaceContext::MutatingUse(MutatingUseContext::AsmOutput),
                                 location
                             );
                         }
-                        for (span, input) in & $($mutability)? inputs[..] {
+                        for (span, input) in & $($mutability)? asm.inputs[..] {
                             self.visit_span(span);
                             self.visit_operand(input, location);
                         }
@@ -567,7 +560,7 @@ macro_rules! make_mir_visitor {
             fn super_assert_message(&mut self,
                                     msg: & $($mutability)? AssertMessage<'tcx>,
                                     location: Location) {
-                use crate::mir::interpret::EvalErrorKind::*;
+                use crate::mir::interpret::InterpError::*;
                 if let BoundsCheck { len, index } = msg {
                     self.visit_operand(len, location);
                     self.visit_operand(index, location);
@@ -707,7 +700,7 @@ macro_rules! make_mir_visitor {
             fn super_ascribe_user_ty(&mut self,
                                      place: & $($mutability)? Place<'tcx>,
                                      _variance: & $($mutability)? ty::Variance,
-                                     user_ty: & $($mutability)? UserTypeProjection<'tcx>,
+                                     user_ty: & $($mutability)? UserTypeProjection,
                                      location: Location) {
                 self.visit_place(
                     place,
@@ -736,25 +729,16 @@ macro_rules! make_mir_visitor {
                     Place::Base(PlaceBase::Local(local)) => {
                         self.visit_local(local, context, location);
                     }
-                    Place::Base(PlaceBase::Static(static_)) => {
-                        self.visit_static(static_, context, location);
+                    Place::Base(PlaceBase::Static(box Static { kind, ty })) => {
+                        if let StaticKind::Static(def_id) = kind {
+                            self.visit_def_id(& $($mutability)? *def_id, location)
+                        }
+                        self.visit_ty(& $($mutability)? *ty, TyContext::Location(location));
                     }
-                    Place::Base(PlaceBase::Promoted(promoted)) => {
-                        self.visit_ty(& $($mutability)? promoted.1, TyContext::Location(location));
-                    },
                     Place::Projection(proj) => {
                         self.visit_projection(proj, context, location);
                     }
                 }
-            }
-
-            fn super_static(&mut self,
-                            static_: & $($mutability)? Static<'tcx>,
-                            _context: PlaceContext<'tcx>,
-                            location: Location) {
-                let Static { def_id, ty } = static_;
-                self.visit_def_id(def_id, location);
-                self.visit_ty(ty, TyContext::Location(location));
             }
 
             fn super_projection(&mut self,
@@ -793,7 +777,7 @@ macro_rules! make_mir_visitor {
                                                     min_length: _,
                                                     from_end: _ } => {
                     }
-                    ProjectionElem::Downcast(_adt_def, _variant_index) => {
+                    ProjectionElem::Downcast(_name, _variant_index) => {
                     }
                 }
             }
@@ -867,7 +851,7 @@ macro_rules! make_mir_visitor {
 
             fn super_user_type_projection(
                 &mut self,
-                _ty: & $($mutability)? UserTypeProjection<'tcx>,
+                _ty: & $($mutability)? UserTypeProjection,
             ) {
             }
 
@@ -886,7 +870,7 @@ macro_rules! make_mir_visitor {
             fn super_region(&mut self, _region: & $($mutability)? ty::Region<'tcx>) {
             }
 
-            fn super_const(&mut self, _const: & $($mutability)? &'tcx ty::LazyConst<'tcx>) {
+            fn super_const(&mut self, _const: & $($mutability)? &'tcx ty::Const<'tcx>) {
             }
 
             fn super_substs(&mut self, _substs: & $($mutability)? SubstsRef<'tcx>) {

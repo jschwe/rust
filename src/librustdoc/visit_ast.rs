@@ -27,10 +27,10 @@ use crate::doctree::*;
 // Also, is there some reason that this doesn't use the 'visit'
 // framework from syntax?.
 
-pub struct RustdocVisitor<'a, 'tcx: 'a, 'rcx: 'a> {
+pub struct RustdocVisitor<'a, 'tcx> {
     pub module: Module,
     pub attrs: hir::HirVec<ast::Attribute>,
-    pub cx: &'a core::DocContext<'a, 'tcx, 'rcx>,
+    pub cx: &'a core::DocContext<'tcx>,
     view_item_stack: FxHashSet<ast::NodeId>,
     inlining: bool,
     /// Are the current module and all of its parents public?
@@ -38,10 +38,10 @@ pub struct RustdocVisitor<'a, 'tcx: 'a, 'rcx: 'a> {
     exact_paths: Option<FxHashMap<DefId, Vec<String>>>,
 }
 
-impl<'a, 'tcx, 'rcx> RustdocVisitor<'a, 'tcx, 'rcx> {
+impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
     pub fn new(
-        cx: &'a core::DocContext<'a, 'tcx, 'rcx>
-    ) -> RustdocVisitor<'a, 'tcx, 'rcx> {
+        cx: &'a core::DocContext<'tcx>
+    ) -> RustdocVisitor<'a, 'tcx> {
         // If the root is re-exported, terminate all recursion.
         let mut stack = FxHashSet::default();
         stack.insert(ast::CRATE_NODE_ID);
@@ -141,9 +141,10 @@ impl<'a, 'tcx, 'rcx> RustdocVisitor<'a, 'tcx, 'rcx> {
             name,
             variants: def.variants.iter().map(|v| Variant {
                 name: v.node.ident.name,
+                id: v.node.id,
                 attrs: v.node.attrs.clone(),
-                stab: self.stability(v.node.data.hir_id()),
-                depr: self.deprecation(v.node.data.hir_id()),
+                stab: self.stability(v.node.id),
+                depr: self.deprecation(v.node.id),
                 def: v.node.data.clone(),
                 whence: v.span,
             }).collect(),
@@ -178,9 +179,10 @@ impl<'a, 'tcx, 'rcx> RustdocVisitor<'a, 'tcx, 'rcx> {
             Some(kind) => {
                 let name = if kind == MacroKind::Derive {
                     item.attrs.lists("proc_macro_derive")
-                              .filter_map(|mi| mi.name())
+                              .filter_map(|mi| mi.ident())
                               .next()
                               .expect("proc-macro derives require a name")
+                              .name
                 } else {
                     name
                 };
@@ -193,8 +195,8 @@ impl<'a, 'tcx, 'rcx> RustdocVisitor<'a, 'tcx, 'rcx> {
 
                     if let Some(list) = mi.meta_item_list() {
                         for inner_mi in list {
-                            if let Some(name) = inner_mi.name() {
-                                helpers.push(name);
+                            if let Some(ident) = inner_mi.ident() {
+                                helpers.push(ident.name);
                             }
                         }
                     }
@@ -245,7 +247,7 @@ impl<'a, 'tcx, 'rcx> RustdocVisitor<'a, 'tcx, 'rcx> {
         let orig_inside_public_path = self.inside_public_path;
         self.inside_public_path &= vis.node.is_pub();
         for i in &m.item_ids {
-            let item = self.cx.tcx.hir().expect_item(i.id);
+            let item = self.cx.tcx.hir().expect_item_by_hir_id(i.id);
             self.visit_item(item, None, &mut om);
         }
         self.inside_public_path = orig_inside_public_path;
@@ -269,7 +271,7 @@ impl<'a, 'tcx, 'rcx> RustdocVisitor<'a, 'tcx, 'rcx> {
                           om: &mut Module,
                           please_inline: bool) -> bool {
 
-        fn inherits_doc_hidden(cx: &core::DocContext<'_, '_, '_>, mut node: ast::NodeId) -> bool {
+        fn inherits_doc_hidden(cx: &core::DocContext<'_>, mut node: ast::NodeId) -> bool {
             while let Some(id) = cx.tcx.hir().get_enclosing_scope(node) {
                 node = id;
                 if cx.tcx.hir().attrs(node).lists("doc").has_word("hidden") {
@@ -342,7 +344,7 @@ impl<'a, 'tcx, 'rcx> RustdocVisitor<'a, 'tcx, 'rcx> {
             Node::Item(&hir::Item { node: hir::ItemKind::Mod(ref m), .. }) if glob => {
                 let prev = mem::replace(&mut self.inlining, true);
                 for i in &m.item_ids {
-                    let i = self.cx.tcx.hir().expect_item(i.id);
+                    let i = self.cx.tcx.hir().expect_item_by_hir_id(i.id);
                     self.visit_item(i, None, om);
                 }
                 self.inlining = prev;
@@ -419,8 +421,8 @@ impl<'a, 'tcx, 'rcx> RustdocVisitor<'a, 'tcx, 'rcx> {
                 // Struct and variant constructors and proc macro stubs always show up alongside
                 // their definitions, we've already processed them so just discard these.
                 match path.def {
-                    Def::StructCtor(..) | Def::VariantCtor(..) | Def::SelfCtor(..) |
-                    Def::Macro(_, MacroKind::ProcMacroStub) => return,
+                    Def::Ctor(..) | Def::SelfCtor(..) | Def::Macro(_, MacroKind::ProcMacroStub) =>
+                        return,
                     _ => {}
                 }
 

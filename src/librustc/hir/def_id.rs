@@ -1,5 +1,4 @@
-use crate::ty;
-use crate::ty::TyCtxt;
+use crate::ty::{self, TyCtxt};
 use crate::hir::map::definitions::FIRST_FREE_HIGH_DEF_INDEX;
 use rustc_data_structures::indexed_vec::Idx;
 use serialize;
@@ -249,7 +248,7 @@ impl DefId {
         if self.is_local() && self.index == CRATE_DEF_INDEX {
             format!("top-level module")
         } else {
-            format!("module `{}`", tcx.item_path_str(*self))
+            format!("module `{}`", tcx.def_path_str(*self))
         }
     }
 }

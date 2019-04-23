@@ -1,10 +1,9 @@
 use crate::ast::{self, Ident};
-use crate::source_map::{SourceMap, FilePathMapping};
 use crate::parse::{token, ParseSess};
-use crate::symbol::{Symbol, keywords};
+use crate::symbol::Symbol;
 
 use errors::{Applicability, FatalError, Diagnostic, DiagnosticBuilder};
-use syntax_pos::{BytePos, CharPos, Pos, Span, NO_EXPANSION};
+use syntax_pos::{BytePos, Pos, Span, NO_EXPANSION};
 use core::unicode::property::Pattern_White_Space;
 
 use std::borrow::Cow;
@@ -43,16 +42,16 @@ pub struct UnmatchedBrace {
 }
 
 pub struct StringReader<'a> {
-    pub sess: &'a ParseSess,
+    crate sess: &'a ParseSess,
     /// The absolute offset within the source_map of the next character to read
-    pub next_pos: BytePos,
+    crate next_pos: BytePos,
     /// The absolute offset within the source_map of the current character
-    pub pos: BytePos,
+    crate pos: BytePos,
     /// The current character (which has been read from self.pos)
-    pub ch: Option<char>,
-    pub source_file: Lrc<syntax_pos::SourceFile>,
+    crate ch: Option<char>,
+    crate source_file: Lrc<syntax_pos::SourceFile>,
     /// Stop reading src at this index.
-    pub end_src_index: usize,
+    crate end_src_index: usize,
     // cached:
     peek_tok: token::Token,
     peek_span: Span,
@@ -126,7 +125,7 @@ impl<'a> StringReader<'a> {
     }
 
     /// Immutably extract string if found at current position with given delimiters
-    pub fn peek_delimited(&self, from_ch: char, to_ch: char) -> Option<String> {
+    fn peek_delimited(&self, from_ch: char, to_ch: char) -> Option<String> {
         let mut pos = self.pos;
         let mut idx = self.src_index(pos);
         let mut ch = char_at(&self.src, idx);
@@ -191,7 +190,7 @@ impl<'a> StringReader<'a> {
         self.fatal_span(self.peek_span, m)
     }
 
-    pub fn emit_fatal_errors(&mut self) {
+    crate fn emit_fatal_errors(&mut self) {
         for err in &mut self.fatal_errs {
             err.emit();
         }
@@ -631,26 +630,14 @@ impl<'a> StringReader<'a> {
                         self.bump();
                     }
 
-                    if doc_comment {
+                    let tok = if doc_comment {
                         self.with_str_from(start_bpos, |string| {
-                            // comments with only more "/"s are not doc comments
-                            let tok = if is_doc_comment(string) {
-                                token::DocComment(Symbol::intern(string))
-                            } else {
-                                token::Comment
-                            };
-
-                            Some(TokenAndSpan {
-                                tok,
-                                sp: self.mk_sp(start_bpos, self.pos),
-                            })
+                            token::DocComment(Symbol::intern(string))
                         })
                     } else {
-                        Some(TokenAndSpan {
-                            tok: token::Comment,
-                            sp: self.mk_sp(start_bpos, self.pos),
-                        })
-                    }
+                        token::Comment
+                    };
+                    Some(TokenAndSpan { tok, sp: self.mk_sp(start_bpos, self.pos) })
                 }
                 Some('*') => {
                     self.bump();
@@ -667,14 +654,9 @@ impl<'a> StringReader<'a> {
                     return None;
                 }
 
-                // I guess this is the only way to figure out if
-                // we're at the beginning of the file...
-                let smap = SourceMap::new(FilePathMapping::empty());
-                smap.files.borrow_mut().source_files.push(self.source_file.clone());
-                let loc = smap.lookup_char_pos_adj(self.pos);
-                debug!("Skipping a shebang");
-                if loc.line == 1 && loc.col == CharPos(0) {
-                    // FIXME: Add shebang "token", return it
+                let is_beginning_of_file = self.pos == self.source_file.start_pos;
+                if is_beginning_of_file {
+                    debug!("Skipping a shebang");
                     let start = self.pos;
                     while !self.ch_is('\n') && !self.is_eof() {
                         self.bump();
@@ -968,9 +950,10 @@ impl<'a> StringReader<'a> {
                                 } else {
                                     let span = self.mk_sp(start, self.pos);
                                     let mut suggestion = "\\u{".to_owned();
+                                    let msg = "incorrect unicode escape sequence";
                                     let mut err = self.sess.span_diagnostic.struct_span_err(
                                         span,
-                                        "incorrect unicode escape sequence",
+                                        msg,
                                     );
                                     let mut i = 0;
                                     while let (Some(ch), true) = (self.ch, i < 6) {
@@ -991,8 +974,8 @@ impl<'a> StringReader<'a> {
                                             Applicability::MaybeIncorrect,
                                         );
                                     } else {
-                                        err.span_help(
-                                            span,
+                                        err.span_label(span, msg);
+                                        err.help(
                                             "format of unicode escape sequences is `\\u{...}`",
                                         );
                                     }
@@ -1018,25 +1001,24 @@ impl<'a> StringReader<'a> {
                             }
                             c => {
                                 let pos = self.pos;
-                                let mut err = self.struct_err_span_char(escaped_pos,
-                                                                        pos,
-                                                                        if ascii_only {
-                                                                            "unknown byte escape"
-                                                                        } else {
-                                                                            "unknown character \
-                                                                             escape"
-                                                                        },
-                                                                        c);
+                                let msg = if ascii_only {
+                                    "unknown byte escape"
+                                } else {
+                                    "unknown character escape"
+                                };
+                                let mut err = self.struct_err_span_char(escaped_pos, pos, msg, c);
+                                err.span_label(self.mk_sp(escaped_pos, pos), msg);
                                 if e == '\r' {
-                                    err.span_help(self.mk_sp(escaped_pos, pos),
-                                                  "this is an isolated carriage return; consider \
-                                                   checking your editor and version control \
-                                                   settings");
+                                    err.help(
+                                        "this is an isolated carriage return; consider checking \
+                                         your editor and version control settings",
+                                    );
                                 }
                                 if (e == '{' || e == '}') && !ascii_only {
-                                    err.span_help(self.mk_sp(escaped_pos, pos),
-                                                  "if used in a formatting string, curly braces \
-                                                   are escaped with `{{` and `}}`");
+                                    err.help(
+                                        "if used in a formatting string, curly braces are escaped \
+                                         with `{{` and `}}`",
+                                    );
                                 }
                                 err.emit();
                                 false
@@ -1249,15 +1231,11 @@ impl<'a> StringReader<'a> {
                     // FIXME: perform NFKC normalization here. (Issue #2253)
                     let ident = self.mk_ident(string);
 
-                    if is_raw_ident && (ident.is_path_segment_keyword() ||
-                                        ident.name == keywords::Underscore.name()) {
-                        self.fatal_span_(raw_start, self.pos,
-                            &format!("`r#{}` is not currently supported.", ident.name)
-                        ).raise();
-                    }
-
                     if is_raw_ident {
                         let span = self.mk_sp(raw_start, self.pos);
+                        if !ident.can_be_raw() {
+                            self.err_span(span, &format!("`{}` cannot be a raw identifier", ident));
+                        }
                         self.sess.raw_identifier_spans.borrow_mut().push(span);
                     }
 
@@ -1423,15 +1401,17 @@ impl<'a> StringReader<'a> {
 
                 // If the character is an ident start not followed by another single
                 // quote, then this is a lifetime name:
-                if ident_start(Some(c2)) && !self.ch_is('\'') {
+                if (ident_start(Some(c2)) || c2.is_numeric()) && !self.ch_is('\'') {
                     while ident_continue(self.ch) {
                         self.bump();
                     }
                     // lifetimes shouldn't end with a single quote
                     // if we find one, then this is an invalid character literal
                     if self.ch_is('\'') {
-                        self.err_span_(start_with_quote, self.next_pos,
-                                "character literal may only contain one codepoint");
+                        self.err_span_(
+                            start_with_quote,
+                            self.next_pos,
+                            "character literal may only contain one codepoint");
                         self.bump();
                         return Ok(token::Literal(token::Err(Symbol::intern("??")), None))
 
@@ -1443,6 +1423,15 @@ impl<'a> StringReader<'a> {
                     let ident = self.with_str_from(start, |lifetime_name| {
                         self.mk_ident(&format!("'{}", lifetime_name))
                     });
+
+                    if c2.is_numeric() {
+                        // this is a recovered lifetime written `'1`, error but accept it
+                        self.err_span_(
+                            start_with_quote,
+                            self.pos,
+                            "lifetimes cannot start with a number",
+                        );
+                    }
 
                     return Ok(token::Lifetime(ident));
                 }
@@ -1873,6 +1862,7 @@ fn is_block_doc_comment(s: &str) -> bool {
     res
 }
 
+/// Determine whether `c` is a valid start for an ident.
 fn ident_start(c: Option<char>) -> bool {
     let c = match c {
         Some(c) => c,
@@ -1903,7 +1893,7 @@ mod tests {
 
     use crate::ast::{Ident, CrateConfig};
     use crate::symbol::Symbol;
-    use crate::source_map::SourceMap;
+    use crate::source_map::{SourceMap, FilePathMapping};
     use crate::feature_gate::UnstableFeatures;
     use crate::parse::token;
     use crate::diagnostics::plugin::ErrorMap;
@@ -1918,9 +1908,10 @@ mod tests {
         let emitter = errors::emitter::EmitterWriter::new(Box::new(io::sink()),
                                                           Some(sm.clone()),
                                                           false,
+                                                          false,
                                                           false);
         ParseSess {
-            span_diagnostic: errors::Handler::with_emitter(true, false, Box::new(emitter)),
+            span_diagnostic: errors::Handler::with_emitter(true, None, Box::new(emitter)),
             unstable_features: UnstableFeatures::from_environment(),
             config: CrateConfig::default(),
             included_mod_stack: Lock::new(Vec::new()),

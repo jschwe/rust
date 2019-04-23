@@ -86,7 +86,7 @@ pub fn expand_test_or_bench(
         cx.path(sp, vec![test_id, cx.ident_of(name)])
     };
 
-    // creates test::$name
+    // creates test::ShouldPanic::$name
     let should_panic_path = |name| {
         cx.path(sp, vec![test_id, cx.ident_of("ShouldPanic"), cx.ident_of(name)])
     };
@@ -227,7 +227,7 @@ fn should_panic(cx: &ExtCtxt<'_>, i: &ast::Item) -> ShouldPanic {
                         .and_then(|mi| mi.value_str());
                     if list.len() != 1 || msg.is_none() {
                         sd.struct_span_warn(
-                            attr.span(),
+                            attr.span,
                             "argument must be of the form: \
                              `expected = \"error message\"`"
                         ).note("Errors in this attribute were erroneously \
