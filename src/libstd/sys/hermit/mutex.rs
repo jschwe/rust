@@ -1,15 +1,17 @@
-use crate::cell::UnsafeCell;
+use crate::mem;
+use hermit::synch::recmutex::*;
+use hermit::synch::semaphore::*;
 
 pub struct Mutex {
-    locked: UnsafeCell<bool>,
+    inner: Semaphore
 }
 
 unsafe impl Send for Mutex {}
-unsafe impl Sync for Mutex {} // no threads on wasm
+unsafe impl Sync for Mutex {}
 
 impl Mutex {
     pub const fn new() -> Mutex {
-        Mutex { locked: UnsafeCell::new(false) }
+        Mutex { inner: Semaphore::new(1) }
     }
 
     #[inline]
@@ -18,25 +20,17 @@ impl Mutex {
 
     #[inline]
     pub unsafe fn lock(&self) {
-        let locked = self.locked.get();
-        assert!(!*locked, "cannot recursively acquire mutex");
-        *locked = true;
+        self.inner.acquire(None);
     }
 
     #[inline]
     pub unsafe fn unlock(&self) {
-        *self.locked.get() = false;
+        self.inner.release();
     }
 
     #[inline]
     pub unsafe fn try_lock(&self) -> bool {
-        let locked = self.locked.get();
-        if *locked {
-            false
-        } else {
-            *locked = true;
-            true
-        }
+        self.inner.try_acquire()
     }
 
     #[inline]
@@ -44,26 +38,35 @@ impl Mutex {
     }
 }
 
-// All empty stubs because wasm has no threads yet, so lock acquisition always
-// succeeds.
 pub struct ReentrantMutex {
+    inner: RecursiveMutex
 }
 
 impl ReentrantMutex {
     pub unsafe fn uninitialized() -> ReentrantMutex {
-        ReentrantMutex { }
+        ReentrantMutex { inner: mem::uninitialized() }
     }
 
-    pub unsafe fn init(&mut self) {}
+    #[inline]
+    pub unsafe fn init(&mut self) {
+        self.inner = RecursiveMutex::new()
+    }
 
-    pub unsafe fn lock(&self) {}
+    #[inline]
+    pub unsafe fn lock(&self) {
+        self.inner.acquire();
+    }
 
     #[inline]
     pub unsafe fn try_lock(&self) -> bool {
         true
     }
 
-    pub unsafe fn unlock(&self) {}
+    #[inline]
+    pub unsafe fn unlock(&self) {
+        self.inner.release()
+    }
 
+    #[inline]
     pub unsafe fn destroy(&self) {}
 }
