@@ -248,6 +248,7 @@
 #![feature(compiler_builtins_lib)]
 #![feature(concat_idents)]
 #![feature(const_cstr_unchecked)]
+#![feature(const_fn)]
 #![feature(const_raw_ptr_deref)]
 #![feature(core_intrinsics)]
 #![feature(doc_alias)]

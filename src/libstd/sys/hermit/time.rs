@@ -12,6 +12,7 @@ pub const UNIX_EPOCH: SystemTime = SystemTime(Duration::from_secs(0));
 impl Instant {
     pub fn now() -> Instant {
         Instant(Duration::from_secs(0))
+        //Instant(TimeSysCall::perform(TimeClock::Monotonic))
     }
 
     pub const fn zero() -> Instant {
@@ -22,8 +23,8 @@ impl Instant {
         false
     }
 
-    pub fn sub_instant(&self, other: &Instant) -> Duration {
-        self.0 - other.0
+    pub fn checked_sub_instant(&self, other: &Instant) -> Option<Duration> {
+        self.0.checked_sub(other.0)
     }
 
     pub fn checked_add_duration(&self, other: &Duration) -> Option<Instant> {
@@ -38,6 +39,7 @@ impl Instant {
 impl SystemTime {
     pub fn now() -> SystemTime {
         SystemTime(Duration::from_secs(0))
+        //SystemTime(TimeSysCall::perform(TimeClock::System))
     }
 
     pub fn sub_time(&self, other: &SystemTime)

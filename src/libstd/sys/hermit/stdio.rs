@@ -1,5 +1,7 @@
 use crate::io;
 use crate::str;
+use crate::io::{IoVec, IoVecMut};
+use crate::slice;
 use core::fmt::Write;
 use hermit::console::*;
 
@@ -12,9 +14,16 @@ impl Stdin {
         Ok(Stdin)
     }
 
-    pub fn read(&self, _data: &mut [u8]) -> io::Result<usize> {
+    pub fn read(&self, data: &mut [u8]) -> io::Result<usize> {
+        self.read_vectored(&mut [IoVecMut::new(data)])
+    }
+
+    pub fn read_vectored(&self, _data: &mut [IoVecMut<'_>]) -> io::Result<usize> {
+        //ManuallyDrop::new(unsafe { WasiFd::from_raw(libc::STDIN_FILENO as u32) })
+        //    .read(data)
         Ok(0)
     }
+
 }
 
 impl Stdout {
@@ -24,6 +33,15 @@ impl Stdout {
 
     pub fn write(&self, data: &[u8]) -> io::Result<usize> {
         match CONSOLE.lock().write_str(str::from_utf8(data).unwrap()) {
+            Err(_err) => Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print")),
+            _ => Ok(data.len())
+        }
+    }
+
+    pub fn write_vectored(&self, data: &[IoVec<'_>]) -> io::Result<usize> {
+        let slice = unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len()) };
+
+        match CONSOLE.lock().write_str(str::from_utf8(slice).unwrap()) {
             Err(_err) => Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print")),
             _ => Ok(data.len())
         }
@@ -42,6 +60,15 @@ impl Stderr {
     pub fn write(&self, data: &[u8]) -> io::Result<usize> {
         match CONSOLE.lock().write_str(str::from_utf8(data).unwrap()) {
             Err(_err) => Err(io::Error::new(io::ErrorKind::Other, "Stderr is not able to print")),
+            _ => Ok(data.len())
+        }
+    }
+
+    pub fn write_vectored(&self, data: &[IoVec<'_>]) -> io::Result<usize> {
+        let slice = unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len()) };
+
+        match CONSOLE.lock().write_str(str::from_utf8(slice).unwrap()) {
+            Err(_err) => Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print")),
             _ => Ok(data.len())
         }
     }

@@ -1,11 +1,10 @@
 use crate::ffi::OsString;
 use crate::fmt;
 use crate::hash::{Hash, Hasher};
-use crate::io::{self, SeekFrom};
+use crate::io::{self, SeekFrom, IoVec, IoVecMut};
 use crate::path::{Path, PathBuf};
 use crate::sys::time::SystemTime;
 use crate::sys::{unsupported, Void};
-use crate::sys_common::AsInner;
 
 pub struct File(Void);
 
@@ -57,10 +56,6 @@ impl Clone for FileAttr {
     }
 }
 
-impl AsInner<Void> for FileAttr {
-    fn as_inner(&self) -> &Void { &self.0 }
-}
-
 impl FilePermissions {
     pub fn readonly(&self) -> bool {
         match self.0 {}
@@ -87,7 +82,7 @@ impl Eq for FilePermissions {
 }
 
 impl fmt::Debug for FilePermissions {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {}
     }
 }
@@ -130,13 +125,13 @@ impl Hash for FileType {
 }
 
 impl fmt::Debug for FileType {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {}
     }
 }
 
 impl fmt::Debug for ReadDir {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {}
     }
 }
@@ -205,7 +200,15 @@ impl File {
         match self.0 {}
     }
 
+    pub fn read_vectored(&self, _bufs: &mut [IoVecMut<'_>]) -> io::Result<usize> {
+        match self.0 {}
+    }
+
     pub fn write(&self, _buf: &[u8]) -> io::Result<usize> {
+        match self.0 {}
+    }
+
+    pub fn write_vectored(&self, _bufs: &[IoVec<'_>]) -> io::Result<usize> {
         match self.0 {}
     }
 
@@ -241,7 +244,7 @@ impl DirBuilder {
 }
 
 impl fmt::Debug for File {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {}
     }
 }
