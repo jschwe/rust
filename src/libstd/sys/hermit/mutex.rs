@@ -3,7 +3,7 @@ use hermit::synch::recmutex::*;
 use hermit::synch::semaphore::*;
 
 pub struct Mutex {
-    inner: Semaphore
+    inner: Option<Semaphore>
 }
 
 unsafe impl Send for Mutex {}
@@ -11,26 +11,36 @@ unsafe impl Sync for Mutex {}
 
 impl Mutex {
     pub const fn new() -> Mutex {
-        Mutex { inner: Semaphore::new(1) }
+        Mutex { inner: None }
     }
 
     #[inline]
     pub unsafe fn init(&mut self) {
+        self.inner = Some(Semaphore::new(1));
     }
 
     #[inline]
     pub unsafe fn lock(&self) {
-        self.inner.acquire(None);
+        match &self.inner {
+            Some(b) => { let _ = b.acquire(None); },
+            None => panic!("Usage of an uninitialized mutex")
+        }
     }
 
     #[inline]
     pub unsafe fn unlock(&self) {
-        self.inner.release();
+        match &self.inner {
+            Some(b) => b.release(),
+            None => panic!("Usage of an uninitialized mutex")
+        }
     }
 
     #[inline]
     pub unsafe fn try_lock(&self) -> bool {
-        self.inner.try_acquire()
+        match &self.inner {
+            Some(b) => b.try_acquire(),
+            None => panic!("Usage of an uninitialized mutex")
+        }
     }
 
     #[inline]
