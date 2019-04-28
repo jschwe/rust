@@ -37,7 +37,6 @@ pub mod process;
 pub mod stack_overflow;
 pub mod time;
 pub mod thread_local;
-pub mod thread_local_atomics;
 pub mod fast_thread_local;
 
 pub fn unsupported<T>() -> crate::io::Result<T> {
