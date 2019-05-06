@@ -1,9 +1,20 @@
-use crate::mem;
-use hermit::synch::recmutex::*;
-use hermit::synch::semaphore::*;
+use crate::ptr;
+use crate::ffi::c_void;
+
+extern "C" {
+    fn sys_sem_init(sem: *mut *const c_void, value: u32) -> i32;
+    fn sys_sem_destroy(sem: *const c_void) -> i32;
+    fn sys_sem_post(sem: *const c_void) -> i32;
+    fn sys_sem_trywait(sem: *const c_void) -> i32;
+    fn sys_sem_timedwait(sem: *const c_void, ms: u32) -> i32;
+    fn sys_recmutex_init(recmutex: *mut *const c_void) -> i32;
+    fn sys_recmutex_destroy(recmutex: *const c_void) -> i32;
+    fn sys_recmutex_lock(recmutex: *const c_void) -> i32;
+    fn sys_recmutex_unlock(recmutex: *const c_void) -> i32;
+}
 
 pub struct Mutex {
-    inner: Option<Semaphore>
+    inner: *const c_void
 }
 
 unsafe impl Send for Mutex {}
@@ -11,60 +22,53 @@ unsafe impl Sync for Mutex {}
 
 impl Mutex {
     pub const fn new() -> Mutex {
-        Mutex { inner: None }
+        Mutex { inner: ptr::null() }
     }
 
     #[inline]
     pub unsafe fn init(&mut self) {
-        self.inner = Some(Semaphore::new(1));
+        let _ = sys_sem_init(&mut self.inner as *mut *const c_void, 1);
     }
 
     #[inline]
     pub unsafe fn lock(&self) {
-        match &self.inner {
-            Some(b) => { let _ = b.acquire(None); },
-            None => panic!("Usage of an uninitialized mutex")
-        }
+        let _ = sys_sem_timedwait(self.inner, 0);
     }
 
     #[inline]
     pub unsafe fn unlock(&self) {
-        match &self.inner {
-            Some(b) => b.release(),
-            None => panic!("Usage of an uninitialized mutex")
-        }
+        let _ = sys_sem_post(self.inner);
     }
 
     #[inline]
     pub unsafe fn try_lock(&self) -> bool {
-        match &self.inner {
-            Some(b) => b.try_acquire(),
-            None => panic!("Usage of an uninitialized mutex")
-        }
+        let result = sys_sem_trywait(self.inner);
+        result == 0
     }
 
     #[inline]
     pub unsafe fn destroy(&self) {
+        let _ = sys_sem_destroy(self.inner);
     }
 }
 
 pub struct ReentrantMutex {
-    inner: RecursiveMutex
+    inner: *const c_void
 }
 
 impl ReentrantMutex {
     pub unsafe fn uninitialized() -> ReentrantMutex {
-        ReentrantMutex { inner: mem::uninitialized() }
+        ReentrantMutex { inner: ptr::null() }
     }
 
     #[inline]
     pub unsafe fn init(&mut self) {
-        self.inner = RecursiveMutex::new()
+        let _ = sys_recmutex_init(&mut self.inner as *mut *const c_void);
     }
 
     #[inline]
     pub unsafe fn lock(&self) {
-        self.inner.acquire();
+        let _ = sys_recmutex_lock(self.inner);
     }
 
     #[inline]
@@ -74,9 +78,11 @@ impl ReentrantMutex {
 
     #[inline]
     pub unsafe fn unlock(&self) {
-        self.inner.release()
+        let _ = sys_recmutex_unlock(self.inner);
     }
 
     #[inline]
-    pub unsafe fn destroy(&self) {}
+    pub unsafe fn destroy(&self) {
+        let _ = sys_recmutex_destroy(self.inner);
+    }
 }

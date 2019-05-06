@@ -4,17 +4,46 @@ use crate::ffi::CStr;
 use crate::io;
 use crate::time::Duration;
 use crate::mem;
+use crate::fmt;
 use core::u32;
-use hermit::syscalls::{Tid,sys_usleep,sys_yield,sys_spawn};
-use hermit::scheduler::task::{Priority,NORMAL_PRIO};
 
 use crate::sys_common::thread::*;
+
+pub type Tid = u32;
+
+/// Priority of a task
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy)]
+pub struct Priority(u8);
+
+impl Priority {
+    pub const fn into(self) -> u8 {
+        self.0
+    }
+
+    pub const fn from(x: u8) -> Self {
+        Priority(x)
+    }
+}
+
+impl fmt::Display for Priority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub const NORMAL_PRIO: Priority = Priority::from(2);
+
+extern "C" {
+    fn sys_usleep(usecs: u64);
+    fn sys_spawn(id: *mut Tid, func: extern "C" fn(usize), arg: usize, prio: u8, core_id: usize) -> i32;
+    fn sys_yield();
+}
 
 pub struct Thread {
     tid: Tid
 }
 
-pub const DEFAULT_MIN_STACK_SIZE: usize = hermit::DEFAULT_STACK_SIZE;
+pub const DEFAULT_MIN_STACK_SIZE: usize = 262144;
 
 impl Thread {
     pub unsafe fn new(_stack: usize, p: Box<dyn FnOnce()>)
@@ -39,7 +68,9 @@ impl Thread {
 
     #[inline]
     pub fn yield_now() {
-        sys_yield();
+        unsafe {
+            sys_yield();
+        }
     }
 
     #[inline]
@@ -49,7 +80,9 @@ impl Thread {
 
     #[inline]
     pub fn sleep(dur: Duration) {
-        sys_usleep(dur.as_micros() as u64);
+        unsafe {
+            sys_usleep(dur.as_micros() as u64);
+        }
     }
 
     pub fn join(self) {

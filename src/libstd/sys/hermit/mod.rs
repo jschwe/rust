@@ -39,6 +39,8 @@ pub mod time;
 pub mod thread_local;
 pub mod fast_thread_local;
 
+use core::{mem,slice};
+
 pub fn unsupported<T>() -> crate::io::Result<T> {
     Err(unsupported_err())
 }
@@ -79,13 +81,50 @@ pub fn hashmap_random_keys() -> (u64, u64) {
 pub fn init() {
 }
 
+unsafe fn run_init_array(
+    init_array_start: &extern "C" fn(),
+    init_array_end: &extern "C" fn(),
+) {
+    let n = (init_array_end as *const _ as usize -
+        init_array_start as *const _ as usize) /
+        mem::size_of::<extern "C" fn()>();
+
+    for f in slice::from_raw_parts(init_array_start, n) {
+        f();
+    }
+}
+
 #[no_mangle]
-pub extern fn hermit_start() {
+pub fn libc_start(_argc: i32, _argv: *mut *mut u8, _env: *mut *mut u8) -> ! {
     extern "C" {
         fn main();
+        //fn _init();
+
+        #[linkage = "extern_weak"]
+        static __preinit_array_start: *const u8;
+        #[linkage = "extern_weak"]
+        static __preinit_array_end: *const u8;
+        #[linkage = "extern_weak"]
+        static __init_array_start: *const u8;
+        #[linkage = "extern_weak"]
+        static __init_array_end: *const u8;
     }
 
     unsafe {
+        // run preinit array
+        if __preinit_array_end as usize - __preinit_array_start as usize > 0 {
+            run_init_array(mem::transmute::<&*const u8, &extern "C" fn()>(&__preinit_array_start), mem::transmute::<&*const u8, &extern "C" fn()>(&__preinit_array_end));
+        }
+
+        //_init();
+
+        // run init array
+        if __init_array_end as usize - __init_array_start as usize > 0 {
+            run_init_array(mem::transmute::<&*const u8, &extern "C" fn()>(&__init_array_start), mem::transmute::<&*const u8, &extern "C" fn()>(&__init_array_end));
+        }
+
         main();
     }
+
+    loop {}
 }

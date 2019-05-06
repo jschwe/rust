@@ -28,8 +28,8 @@ backtrace-sys = { version = "0.1.27", features = ["rustc-dep-of-std"], optional 
 [dev-dependencies]
 rand = "0.6.1"
 
-[target.'cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), target_os = "hermit"))'.dependencies]
-hermit = { path = "../libhermit", features = ['rustc-dep-of-std'] }
+#[target.'cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), target_os = "hermit"))'.dependencies]
+#hermit = { path = "../libhermit", features = ['rustc-dep-of-std'] }
 
 [target.x86_64-apple-darwin.dependencies]
 rustc_asan = { path = "../librustc_asan" }

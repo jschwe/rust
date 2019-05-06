@@ -1,9 +1,9 @@
 use crate::io;
-use crate::str;
 use crate::io::{IoVec, IoVecMut};
-use crate::slice;
-use core::fmt::Write;
-use hermit::console::*;
+
+extern "C" {
+    fn sys_write(fd: i32, buf: *const u8, len: usize) -> isize;
+}
 
 pub struct Stdin;
 pub struct Stdout;
@@ -32,18 +32,20 @@ impl Stdout {
     }
 
     pub fn write(&self, data: &[u8]) -> io::Result<usize> {
-        match CONSOLE.lock().write_str(str::from_utf8(data).unwrap()) {
-            Err(_err) => Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print")),
-            _ => Ok(data.len())
-        }
+        self.write_vectored(&[IoVec::new(data)])
     }
 
     pub fn write_vectored(&self, data: &[IoVec<'_>]) -> io::Result<usize> {
-        let slice = unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len()) };
+        let len;
 
-        match CONSOLE.lock().write_str(str::from_utf8(slice).unwrap()) {
-            Err(_err) => Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print")),
-            _ => Ok(data.len())
+        unsafe {
+            len = sys_write(1, data.as_ptr() as *const u8, data.len())
+        }
+
+        if len < 0 {
+            Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print"))
+        } else {
+            Ok(len as usize)
         }
     }
 
@@ -58,18 +60,20 @@ impl Stderr {
     }
 
     pub fn write(&self, data: &[u8]) -> io::Result<usize> {
-        match CONSOLE.lock().write_str(str::from_utf8(data).unwrap()) {
-            Err(_err) => Err(io::Error::new(io::ErrorKind::Other, "Stderr is not able to print")),
-            _ => Ok(data.len())
-        }
+        self.write_vectored(&[IoVec::new(data)])
     }
 
     pub fn write_vectored(&self, data: &[IoVec<'_>]) -> io::Result<usize> {
-        let slice = unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len()) };
+        let len;
 
-        match CONSOLE.lock().write_str(str::from_utf8(slice).unwrap()) {
-            Err(_err) => Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print")),
-            _ => Ok(data.len())
+        unsafe {
+            len = sys_write(2, data.as_ptr() as *const u8, data.len())
+        }
+
+        if len < 0 {
+            Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print"))
+        } else {
+            Ok(len as usize)
         }
     }
 

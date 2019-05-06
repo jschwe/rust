@@ -333,11 +333,6 @@ extern crate alloc as alloc_crate;
 #[allow(unused_extern_crates)]
 extern crate libc;
 
-#[cfg(target_os = "hermit")]
-#[allow(unused_imports)]
-#[doc(masked)]
-extern crate hermit;
-
 // We always need an unwinder currently for backtraces
 #[doc(masked)]
 #[allow(unused_extern_crates)]
