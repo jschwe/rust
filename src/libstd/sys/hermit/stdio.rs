@@ -32,7 +32,17 @@ impl Stdout {
     }
 
     pub fn write(&self, data: &[u8]) -> io::Result<usize> {
-        self.write_vectored(&[IoVec::new(data)])
+        let len;
+
+        unsafe {
+            len = sys_write(1, data.as_ptr() as *const u8, data.len())
+        }
+
+        if len < 0 {
+            Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print"))
+        } else {
+            Ok(len as usize)
+        }
     }
 
     pub fn write_vectored(&self, data: &[IoVec<'_>]) -> io::Result<usize> {
@@ -60,7 +70,17 @@ impl Stderr {
     }
 
     pub fn write(&self, data: &[u8]) -> io::Result<usize> {
-        self.write_vectored(&[IoVec::new(data)])
+        let len;
+
+        unsafe {
+            len = sys_write(2, data.as_ptr() as *const u8, data.len())
+        }
+
+        if len < 0 {
+            Err(io::Error::new(io::ErrorKind::Other, "Stderr is not able to print"))
+        } else {
+            Ok(len as usize)
+        }
     }
 
     pub fn write_vectored(&self, data: &[IoVec<'_>]) -> io::Result<usize> {
@@ -71,7 +91,7 @@ impl Stderr {
         }
 
         if len < 0 {
-            Err(io::Error::new(io::ErrorKind::Other, "Stdout is not able to print"))
+            Err(io::Error::new(io::ErrorKind::Other, "Stderr is not able to print"))
         } else {
             Ok(len as usize)
         }
