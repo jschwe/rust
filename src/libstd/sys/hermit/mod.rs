@@ -98,6 +98,7 @@ unsafe fn run_init_array(
 pub fn libc_start(_argc: i32, _argv: *mut *mut u8, _env: *mut *mut u8) -> ! {
     extern "C" {
         fn main();
+        fn sys_exit(arg: i32) ->!;
         //fn _init();
 
         #[linkage = "extern_weak"]
@@ -124,7 +125,7 @@ pub fn libc_start(_argc: i32, _argv: *mut *mut u8, _env: *mut *mut u8) -> ! {
         }
 
         main();
-    }
 
-    loop {}
+        sys_exit(0);
+    }
 }
