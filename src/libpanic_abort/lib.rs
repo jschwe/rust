@@ -49,8 +49,13 @@ pub unsafe extern fn __rust_start_panic(_payload: usize) -> u32 {
         libc::abort();
     }
 
+    #[cfg(target_os = "hermit")]
+    unsafe fn abort() -> ! {
+        extern "C" { pub fn sys_abort() ->!; }
+        sys_abort();
+    }
+
     #[cfg(any(target_os = "redox",
-              target_os = "hermit",
               windows,
               all(target_arch = "wasm32", not(target_os = "emscripten"))))]
     unsafe fn abort() -> ! {

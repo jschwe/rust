@@ -69,7 +69,11 @@ pub unsafe fn strlen(mut s: *const c_char) -> usize {
 }
 
 pub unsafe fn abort_internal() -> ! {
-    loop {}
+    extern "C" {
+        fn sys_abort() ->!;
+    }
+
+    sys_abort();
 }
 
 // TODO: just a workaround to test the system
