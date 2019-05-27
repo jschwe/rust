@@ -17,6 +17,7 @@ use crate::os::raw::c_char;
 
 pub mod alloc;
 pub mod args;
+#[cfg(feature = "backtrace")]
 pub mod backtrace;
 pub mod condvar;
 pub mod stdio;
