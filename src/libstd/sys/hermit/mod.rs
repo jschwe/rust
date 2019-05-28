@@ -82,6 +82,15 @@ pub fn hashmap_random_keys() -> (u64, u64) {
     (1, 2)
 }
 
+// This function is needed by the panic runtime. The symbol is named in
+// pre-link args for the target specification, so keep that in sync.
+#[cfg(not(test))]
+#[no_mangle]
+// NB. used by both libunwind and libpanic_abort
+pub unsafe extern "C" fn __rust_abort() {
+    abort_internal();
+}
+
 #[cfg(not(test))]
 pub fn init() {
 }

@@ -49,7 +49,7 @@ cfg_if! {
         #[path = "dummy.rs"]
         mod imp;
     } else if #[cfg(target_os = "hermit")] {
-        #[path = "dummy.rs"]
+        #[path = "hermit.rs"]
         mod imp;
     } else if #[cfg(all(target_env = "msvc", target_arch = "aarch64"))] {
         #[path = "dummy.rs"]
