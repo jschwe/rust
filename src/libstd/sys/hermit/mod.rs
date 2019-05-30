@@ -14,6 +14,7 @@
 //! guaranteed to be a runtime error!
 
 use crate::os::raw::c_char;
+use crate::intrinsics;
 
 pub mod alloc;
 pub mod args;
@@ -67,6 +68,13 @@ pub unsafe fn strlen(mut s: *const c_char) -> usize {
         s = s.offset(1);
     }
     return n
+}
+
+#[no_mangle]
+pub extern "C" fn floor(x: f64) -> f64 {
+    unsafe {
+        intrinsics::floorf64(x)
+    }
 }
 
 pub unsafe fn abort_internal() -> ! {
