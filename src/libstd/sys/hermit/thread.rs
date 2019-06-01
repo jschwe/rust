@@ -59,6 +59,7 @@ impl Thread {
                             Priority::into(NORMAL_PRIO), 0);
 
         return if ret == 0 {
+            mem::forget(p); // ownership passed to pthread_create
             Ok(Thread { tid: tid })
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "Unable to create thread!"))
