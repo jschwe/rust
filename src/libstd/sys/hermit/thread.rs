@@ -36,6 +36,7 @@ pub const NORMAL_PRIO: Priority = Priority::from(2);
 extern "C" {
     fn sys_usleep(usecs: u64);
     fn sys_spawn(id: *mut Tid, func: extern "C" fn(usize), arg: usize, prio: u8, core_id: usize) -> i32;
+    fn sys_join(id: Tid) -> i32;
     fn sys_yield();
 }
 
@@ -43,12 +44,16 @@ pub struct Thread {
     tid: Tid
 }
 
+unsafe impl Send for Thread {}
+unsafe impl Sync for Thread {}
+
 pub const DEFAULT_MIN_STACK_SIZE: usize = 262144;
 
 impl Thread {
     pub unsafe fn new(_stack: usize, p: Box<dyn FnOnce()>)
         -> io::Result<Thread>
     {
+        let p = box p;
         let mut tid: Tid = u32::MAX;
         let ret = sys_spawn(&mut tid as *mut Tid, thread_start, &*p as *const _ as *const u8 as usize,
                             Priority::into(NORMAL_PRIO), 0);
@@ -86,7 +91,9 @@ impl Thread {
     }
 
     pub fn join(self) {
-        //match self.0 {}
+        unsafe {
+            let _ = sys_join(self.tid);
+        }
     }
 
     #[inline]
