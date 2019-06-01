@@ -27,7 +27,6 @@ pub mod io;
 pub mod mutex;
 pub mod rwlock;
 pub mod os;
-pub mod os_str;
 pub mod cmath;
 pub mod thread;
 pub mod env;
@@ -40,6 +39,8 @@ pub mod stack_overflow;
 pub mod time;
 pub mod thread_local;
 pub mod fast_thread_local;
+
+pub use crate::sys_common::os_str_bytes as os_str;
 
 use core::{mem,slice};
 

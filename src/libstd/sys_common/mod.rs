@@ -48,6 +48,7 @@ pub mod mutex;
           unix,
           target_os = "redox",
           target_os = "cloudabi",
+          target_os = "hermit",
           target_arch = "wasm32",
           all(target_vendor = "fortanix", target_env = "sgx")))]
 pub mod os_str_bytes;
