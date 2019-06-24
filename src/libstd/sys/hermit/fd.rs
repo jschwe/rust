@@ -1,74 +1,67 @@
 #![unstable(reason = "not public", issue = "0", feature = "fd")]
 
-use io::{self, Read};
-use mem;
-use sys::{cvt, syscall};
-use sys_common::AsInner;
+use crate::io::{self, Read, ErrorKind};
+use crate::mem;
+use crate::sys::cvt;
+use crate::sys_common::AsInner;
 
+extern {
+    fn sys_read(fd: i32, buf: *mut u8, len: usize) -> isize;
+    fn sys_write(fd: i32, buf: *const u8, len: usize) -> isize;
+    fn sys_close(fd: i32) -> i32;
+}
+
+#[derive(Debug)]
 pub struct FileDesc {
-    fd: usize,
+    fd: i32,
 }
 
 impl FileDesc {
-    pub fn new(fd: usize) -> FileDesc {
+    pub fn new(fd: i32) -> FileDesc {
         FileDesc { fd }
     }
 
-    pub fn raw(&self) -> usize { self.fd }
+    pub fn raw(&self) -> i32 { self.fd }
 
     /// Extracts the actual file descriptor without closing it.
-    pub fn into_raw(self) -> usize {
+    pub fn into_raw(self) -> i32 {
         let fd = self.fd;
         mem::forget(self);
         fd
     }
 
     pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
-        //cvt(syscall::read(self.fd, buf))
-        io::Result(0)
+        let result = unsafe { sys_read(self.fd, buf.as_mut_ptr(), buf.len()) };
+        cvt(result as i32)
     }
 
     pub fn read_to_end(&self, buf: &mut Vec<u8>) -> io::Result<usize> {
-        //let mut me = self;
-        //(&mut me).read_to_end(buf)
-        io::Result(0)
+        let mut me = self;
+        (&mut me).read_to_end(buf)
     }
 
     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
-        //cvt(syscall::write(self.fd, buf))
-        io::Result(0)
+        let result = unsafe { sys_write(self.fd, buf.as_ptr(), buf.len()) };
+        cvt(result as i32)
     }
 
     pub fn duplicate(&self) -> io::Result<FileDesc> {
         self.duplicate_path(&[])
     }
-    pub fn duplicate_path(&self, path: &[u8]) -> io::Result<FileDesc> {
-        let new_fd = cvt(syscall::dup(self.fd, path))?;
-        Ok(FileDesc::new(new_fd))
+    pub fn duplicate_path(&self, _path: &[u8]) -> io::Result<FileDesc> {
+        Err(io::Error::new(ErrorKind::Other, "duplicate isn't supported"))
     }
 
     pub fn nonblocking(&self) -> io::Result<bool> {
-        //let flags = cvt(syscall::fcntl(self.fd, syscall::F_GETFL, 0))?;
-        //Ok(flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK)
-        Ok(true)
+        Ok(false)
     }
 
     pub fn set_cloexec(&self) -> io::Result<()> {
-        //let mut flags = cvt(syscall::fcntl(self.fd, syscall::F_GETFD, 0))?;
-        //flags |= syscall::O_CLOEXEC;
-        //cvt(syscall::fcntl(self.fd, syscall::F_SETFD, flags)).and(Ok(()))
-        Ok(())
+        Err(io::Error::new(ErrorKind::Other, "cloexec isn't supported"))
     }
 
-    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
-        /*let mut flags = cvt(syscall::fcntl(self.fd, syscall::F_GETFL, 0))?;
-        if nonblocking {
-            flags |= syscall::O_NONBLOCK;
-        } else {
-            flags &= !syscall::O_NONBLOCK;
-        }
-        cvt(syscall::fcntl(self.fd, syscall::F_SETFL, flags)).and(Ok(()))*/
-        Ok(())
+    pub fn set_nonblocking(&self, _nonblocking: bool) -> io::Result<()> {
+        Err(io::Error::new(ErrorKind::Other, "nonblocking isn't supported"))
     }
 }
 
@@ -78,8 +71,8 @@ impl<'a> Read for &'a FileDesc {
     }
 }
 
-impl AsInner<usize> for FileDesc {
-    fn as_inner(&self) -> &usize { &self.fd }
+impl AsInner<i32> for FileDesc {
+    fn as_inner(&self) -> &i32 { &self.fd }
 }
 
 impl Drop for FileDesc {
@@ -89,6 +82,6 @@ impl Drop for FileDesc {
         // the file descriptor was closed or not, and if we retried (for
         // something like EINTR), we might close another valid file descriptor
         // (opened after we closed ours.
-        //let _ = syscall::close(self.fd);
+        let _ = unsafe { sys_close(self.fd) };
     }
 }

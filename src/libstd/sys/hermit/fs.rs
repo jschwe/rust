@@ -1,12 +1,33 @@
-use crate::ffi::OsString;
+use crate::ffi::{OsString, CString, CStr};
 use crate::fmt;
+use crate::io::{self, Error, ErrorKind};
 use crate::hash::{Hash, Hasher};
-use crate::io::{self, SeekFrom, IoVec, IoVecMut};
+use crate::io::{SeekFrom, IoVec, IoVecMut};
 use crate::path::{Path, PathBuf};
 use crate::sys::time::SystemTime;
 use crate::sys::{unsupported, Void};
+use crate::sys::hermit::fd::FileDesc;
+use crate::sys::cvt;
+use crate::sys_common::os_str_bytes::OsStrExt;
 
-pub struct File(Void);
+extern {
+    fn sys_open(name: *const i8, flags: i32, mode: i32) -> i32;
+}
+
+fn cstr(path: &Path) -> io::Result<CString> {
+    Ok(CString::new(path.as_os_str().as_bytes())?)
+}
+//const O_ACCMODE: i32 = 00000003;
+const O_RDONLY: i32 = 00000000;
+const O_WRONLY: i32 = 00000001;
+const O_RDWR: i32 = 00000002;
+const O_CREAT: i32 = 00000100;
+const O_EXCL: i32 = 00000200;
+const O_TRUNC: i32 = 00001000;
+const O_APPEND: i32 = 00002000;
+
+#[derive(Debug)]
+pub struct File(FileDesc);
 
 pub struct FileAttr(Void);
 
@@ -15,7 +36,17 @@ pub struct ReadDir(Void);
 pub struct DirEntry(Void);
 
 #[derive(Clone, Debug)]
-pub struct OpenOptions { }
+pub struct OpenOptions {
+    // generic
+    read: bool,
+    write: bool,
+    append: bool,
+    truncate: bool,
+    create: bool,
+    create_new: bool,
+    // system-specific
+    mode: i32
+}
 
 pub struct FilePermissions(Void);
 
@@ -164,72 +195,131 @@ impl DirEntry {
 
 impl OpenOptions {
     pub fn new() -> OpenOptions {
-        OpenOptions { }
+        OpenOptions {
+            // generic
+            read: false,
+            write: false,
+            append: false,
+            truncate: false,
+            create: false,
+            create_new: false,
+            // system-specific
+            mode: 0x777
+        }
     }
 
-    pub fn read(&mut self, _read: bool) { }
-    pub fn write(&mut self, _write: bool) { }
-    pub fn append(&mut self, _append: bool) { }
-    pub fn truncate(&mut self, _truncate: bool) { }
-    pub fn create(&mut self, _create: bool) { }
-    pub fn create_new(&mut self, _create_new: bool) { }
+    pub fn read(&mut self, read: bool) { self.read = read; }
+    pub fn write(&mut self, write: bool) { self.write = write; }
+    pub fn append(&mut self, append: bool) { self.append = append; }
+    pub fn truncate(&mut self, truncate: bool) { self.truncate = truncate; }
+    pub fn create(&mut self, create: bool) { self.create = create; }
+    pub fn create_new(&mut self, create_new: bool) { self.create_new = create_new; }
+
+    fn get_access_mode(&self) -> io::Result<i32> {
+        match (self.read, self.write, self.append) {
+            (true,  false, false) => Ok(O_RDONLY),
+            (false, true,  false) => Ok(O_WRONLY),
+            (true,  true,  false) => Ok(O_RDWR),
+            (false, _,     true)  => Ok(O_WRONLY | O_APPEND),
+            (true,  _,     true)  => Ok(O_RDWR | O_APPEND),
+            (false, false, false) => Err(io::Error::new(ErrorKind::InvalidInput, "invalid access mode")),
+        }
+    }
+
+    fn get_creation_mode(&self) -> io::Result<i32> {
+        match (self.write, self.append) {
+            (true, false) => {}
+            (false, false) =>
+                if self.truncate || self.create || self.create_new {
+                    return Err(io::Error::new(ErrorKind::InvalidInput, "invalid creation mode"));
+                },
+            (_, true) =>
+                if self.truncate && !self.create_new {
+                    return Err(io::Error::new(ErrorKind::InvalidInput, "invalid creation mode"));
+                },
+        }
+
+        Ok(match (self.create, self.truncate, self.create_new) {
+                (false, false, false) => 0,
+                (true,  false, false) => O_CREAT,
+                (false, true,  false) => O_TRUNC,
+                (true,  true,  false) => O_CREAT | O_TRUNC,
+                (_,      _,    true)  => O_CREAT | O_EXCL,
+           })
+    }
 }
 
 impl File {
-    pub fn open(_path: &Path, _opts: &OpenOptions) -> io::Result<File> {
-        unsupported()
+    pub fn open(path: &Path, opts: &OpenOptions) -> io::Result<File> {
+        let path = cstr(path)?;
+        File::open_c(&path, opts)
+    }
+
+    pub fn open_c(path: &CStr, opts: &OpenOptions) -> io::Result<File> {
+        let mut flags = opts.get_access_mode()?;
+        flags = flags | opts.get_creation_mode()?;
+
+        let mode;
+        if flags & O_CREAT == O_CREAT {
+            mode = opts.mode;
+        } else {
+            mode = 0;
+        }
+
+        let fd = unsafe { cvt(sys_open(path.as_ptr(), flags, mode))? };
+        Ok(File(FileDesc::new(fd as i32)))
     }
 
     pub fn file_attr(&self) -> io::Result<FileAttr> {
-        match self.0 {}
+        Err(Error::from_raw_os_error(22))
     }
 
     pub fn fsync(&self) -> io::Result<()> {
-        match self.0 {}
+        Err(Error::from_raw_os_error(22))
     }
 
     pub fn datasync(&self) -> io::Result<()> {
-        match self.0 {}
+        self.fsync()
     }
 
     pub fn truncate(&self, _size: u64) -> io::Result<()> {
-        match self.0 {}
+        Err(Error::from_raw_os_error(22))
     }
 
-    pub fn read(&self, _buf: &mut [u8]) -> io::Result<usize> {
-        match self.0 {}
+    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
     }
 
-    pub fn read_vectored(&self, _bufs: &mut [IoVecMut<'_>]) -> io::Result<usize> {
-        match self.0 {}
+    pub fn read_vectored(&self, bufs: &mut [IoVecMut<'_>]) -> io::Result<usize> {
+        crate::io::default_read_vectored(|buf| self.read(buf), bufs)
     }
 
-    pub fn write(&self, _buf: &[u8]) -> io::Result<usize> {
-        match self.0 {}
+    pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
     }
 
-    pub fn write_vectored(&self, _bufs: &[IoVec<'_>]) -> io::Result<usize> {
-        match self.0 {}
+    pub fn write_vectored(&self, bufs: &[IoVec<'_>]) -> io::Result<usize> {
+        crate::io::default_write_vectored(|buf| self.write(buf), bufs)
     }
 
     pub fn flush(&self) -> io::Result<()> {
-        match self.0 {}
+        Ok(())
     }
 
     pub fn seek(&self, _pos: SeekFrom) -> io::Result<u64> {
-        match self.0 {}
+        Err(Error::from_raw_os_error(22))
     }
 
     pub fn duplicate(&self) -> io::Result<File> {
-        match self.0 {}
+        Err(Error::from_raw_os_error(22))
     }
 
     pub fn set_permissions(&self, _perm: FilePermissions) -> io::Result<()> {
-        match self.0 {}
+        Err(Error::from_raw_os_error(22))
     }
 
     pub fn diverge(&self) -> ! {
-        match self.0 {}
+        loop {}
     }
 }
 
@@ -240,12 +330,6 @@ impl DirBuilder {
 
     pub fn mkdir(&self, _p: &Path) -> io::Result<()> {
         unsupported()
-    }
-}
-
-impl fmt::Debug for File {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {}
     }
 }
 
