@@ -136,7 +136,7 @@
 #![stable(feature = "rust1", since = "1.0.0")]
 
 use crate::iter::{FromIterator, FusedIterator, TrustedLen};
-use crate::{hint, mem, ops::{self, Deref}};
+use crate::{convert, hint, mem, ops::{self, Deref}};
 use crate::pin::Pin;
 
 // Note that this is not a lang item per se, but it has a hidden dependency on
@@ -145,7 +145,7 @@ use crate::pin::Pin;
 // which basically means it must be `Option`.
 
 /// The `Option` type. See [the module level documentation](index.html) for more.
-#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug, Hash)]
+#[derive(Copy, PartialEq, PartialOrd, Eq, Ord, Debug, Hash)]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub enum Option<T> {
     /// No value
@@ -725,8 +725,6 @@ impl<T> Option<T> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(option_xor)]
-    ///
     /// let x = Some(2);
     /// let y: Option<u32> = None;
     /// assert_eq!(x.xor(y), Some(2));
@@ -744,7 +742,7 @@ impl<T> Option<T> {
     /// assert_eq!(x.xor(y), None);
     /// ```
     #[inline]
-    #[unstable(feature = "option_xor", issue = "50512")]
+    #[stable(feature = "option_xor", since = "1.37.0")]
     pub fn xor(self, optb: Option<T>) -> Option<T> {
         match (self, optb) {
             (Some(a), None) => Some(a),
@@ -1039,6 +1037,25 @@ fn expect_failed(msg: &str) -> ! {
 /////////////////////////////////////////////////////////////////////////////
 // Trait implementations
 /////////////////////////////////////////////////////////////////////////////
+
+#[stable(feature = "rust1", since = "1.0.0")]
+impl<T: Clone> Clone for Option<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        match self {
+            Some(x) => Some(x.clone()),
+            None => None,
+        }
+    }
+
+    #[inline]
+    fn clone_from(&mut self, source: &Self) {
+        match (self, source) {
+            (Some(to), Some(from)) => to.clone_from(from),
+            (to, from) => *to = from.clone(),
+        }
+    }
+}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T> Default for Option<T> {
@@ -1411,5 +1428,35 @@ impl<T> ops::Try for Option<T> {
     #[inline]
     fn from_error(_: NoneError) -> Self {
         None
+    }
+}
+
+impl<T> Option<Option<T>> {
+    /// Converts from `Option<Option<T>>` to `Option<T>`
+    ///
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// #![feature(option_flattening)]
+    /// let x: Option<Option<u32>> = Some(Some(6));
+    /// assert_eq!(Some(6), x.flatten());
+    ///
+    /// let x: Option<Option<u32>> = Some(None);
+    /// assert_eq!(None, x.flatten());
+    ///
+    /// let x: Option<Option<u32>> = None;
+    /// assert_eq!(None, x.flatten());
+    /// ```
+    /// Flattening once only removes one level of nesting:
+    /// ```
+    /// #![feature(option_flattening)]
+    /// let x: Option<Option<Option<u32>>> = Some(Some(Some(6)));
+    /// assert_eq!(Some(Some(6)), x.flatten());
+    /// assert_eq!(Some(6), x.flatten().flatten());
+    /// ```
+    #[inline]
+    #[unstable(feature = "option_flattening", issue = "60258")]
+    pub fn flatten(self) -> Option<T> {
+        self.and_then(convert::identity)
     }
 }

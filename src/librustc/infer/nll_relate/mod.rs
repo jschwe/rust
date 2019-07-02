@@ -27,7 +27,8 @@ use crate::ty::error::TypeError;
 use crate::ty::fold::{TypeFoldable, TypeVisitor};
 use crate::ty::relate::{self, Relate, RelateResult, TypeRelation};
 use crate::ty::subst::Kind;
-use crate::ty::{self, Ty, TyCtxt};
+use crate::ty::{self, Ty, TyCtxt, InferConst};
+use crate::mir::interpret::ConstValue;
 use rustc_data_structures::fx::FxHashMap;
 use std::fmt::Debug;
 
@@ -37,11 +38,11 @@ pub enum NormalizationStrategy {
     Eager,
 }
 
-pub struct TypeRelating<'me, 'gcx: 'tcx, 'tcx: 'me, D>
+pub struct TypeRelating<'me, 'tcx, D>
 where
     D: TypeRelatingDelegate<'tcx>,
 {
-    infcx: &'me InferCtxt<'me, 'gcx, 'tcx>,
+    infcx: &'me InferCtxt<'me, 'tcx>,
 
     /// Callback to use when we deduce an outlives relationship
     delegate: D,
@@ -134,12 +135,12 @@ struct BoundRegionScope<'tcx> {
 #[derive(Copy, Clone)]
 struct UniversallyQuantified(bool);
 
-impl<'me, 'gcx, 'tcx, D> TypeRelating<'me, 'gcx, 'tcx, D>
+impl<'me, 'tcx, D> TypeRelating<'me, 'tcx, D>
 where
     D: TypeRelatingDelegate<'tcx>,
 {
     pub fn new(
-        infcx: &'me InferCtxt<'me, 'gcx, 'tcx>,
+        infcx: &'me InferCtxt<'me, 'tcx>,
         delegate: D,
         ambient_variance: ty::Variance,
     ) -> Self {
@@ -267,17 +268,18 @@ where
     fn relate_projection_ty(
         &mut self,
         projection_ty: ty::ProjectionTy<'tcx>,
-        value_ty: ty::Ty<'tcx>,
+        value_ty: Ty<'tcx>,
     ) -> Ty<'tcx> {
-        use crate::infer::type_variable::TypeVariableOrigin;
+        use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
         use crate::traits::WhereClause;
         use syntax_pos::DUMMY_SP;
 
         match value_ty.sty {
             ty::Projection(other_projection_ty) => {
-                let var = self
-                    .infcx
-                    .next_ty_var(TypeVariableOrigin::MiscVariable(DUMMY_SP));
+                let var = self.infcx.next_ty_var(TypeVariableOrigin {
+                    kind: TypeVariableOriginKind::MiscVariable,
+                    span: DUMMY_SP,
+                });
                 self.relate_projection_ty(projection_ty, var);
                 self.relate_projection_ty(other_projection_ty, var);
                 var
@@ -414,7 +416,7 @@ trait VidValuePair<'tcx>: Debug {
     /// for more details on why we want them.
     fn vid_scopes<D: TypeRelatingDelegate<'tcx>>(
         &self,
-        relate: &'r mut TypeRelating<'_, '_, 'tcx, D>,
+        relate: &'r mut TypeRelating<'_, 'tcx, D>,
     ) -> &'r mut Vec<BoundRegionScope<'tcx>>;
 
     /// Given a generalized type G that should replace the vid, relate
@@ -422,7 +424,7 @@ trait VidValuePair<'tcx>: Debug {
     /// appeared.
     fn relate_generalized_ty<D>(
         &self,
-        relate: &mut TypeRelating<'_, '_, 'tcx, D>,
+        relate: &mut TypeRelating<'_, 'tcx, D>,
         generalized_ty: Ty<'tcx>,
     ) -> RelateResult<'tcx, Ty<'tcx>>
     where
@@ -440,7 +442,7 @@ impl VidValuePair<'tcx> for (ty::TyVid, Ty<'tcx>) {
 
     fn vid_scopes<D>(
         &self,
-        relate: &'r mut TypeRelating<'_, '_, 'tcx, D>,
+        relate: &'r mut TypeRelating<'_, 'tcx, D>,
     ) -> &'r mut Vec<BoundRegionScope<'tcx>>
     where
         D: TypeRelatingDelegate<'tcx>,
@@ -450,7 +452,7 @@ impl VidValuePair<'tcx> for (ty::TyVid, Ty<'tcx>) {
 
     fn relate_generalized_ty<D>(
         &self,
-        relate: &mut TypeRelating<'_, '_, 'tcx, D>,
+        relate: &mut TypeRelating<'_, 'tcx, D>,
         generalized_ty: Ty<'tcx>,
     ) -> RelateResult<'tcx, Ty<'tcx>>
     where
@@ -472,7 +474,7 @@ impl VidValuePair<'tcx> for (Ty<'tcx>, ty::TyVid) {
 
     fn vid_scopes<D>(
         &self,
-        relate: &'r mut TypeRelating<'_, '_, 'tcx, D>,
+        relate: &'r mut TypeRelating<'_, 'tcx, D>,
     ) -> &'r mut Vec<BoundRegionScope<'tcx>>
     where
         D: TypeRelatingDelegate<'tcx>,
@@ -482,7 +484,7 @@ impl VidValuePair<'tcx> for (Ty<'tcx>, ty::TyVid) {
 
     fn relate_generalized_ty<D>(
         &self,
-        relate: &mut TypeRelating<'_, '_, 'tcx, D>,
+        relate: &mut TypeRelating<'_, 'tcx, D>,
         generalized_ty: Ty<'tcx>,
     ) -> RelateResult<'tcx, Ty<'tcx>>
     where
@@ -492,11 +494,11 @@ impl VidValuePair<'tcx> for (Ty<'tcx>, ty::TyVid) {
     }
 }
 
-impl<D> TypeRelation<'me, 'gcx, 'tcx> for TypeRelating<'me, 'gcx, 'tcx, D>
+impl<D> TypeRelation<'tcx> for TypeRelating<'me, 'tcx, D>
 where
     D: TypeRelatingDelegate<'tcx>,
 {
-    fn tcx(&self) -> TyCtxt<'me, 'gcx, 'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
         self.infcx.tcx
     }
 
@@ -606,6 +608,21 @@ where
         }
 
         Ok(a)
+    }
+
+    fn consts(
+        &mut self,
+        a: &'tcx ty::Const<'tcx>,
+        b: &'tcx ty::Const<'tcx>,
+    ) -> RelateResult<'tcx, &'tcx ty::Const<'tcx>> {
+        if let ty::Const { val: ConstValue::Infer(InferConst::Canonical(_, _)), .. } = a {
+            // FIXME(const_generics): I'm unsure how this branch should actually be handled,
+            // so this is probably not correct.
+            self.infcx.super_combine_consts(self, a, b)
+        } else {
+            debug!("consts(a={:?}, b={:?}, variance={:?})", a, b, self.ambient_variance);
+            relate::super_relate_consts(self, a, b)
+        }
     }
 
     fn binders<T>(
@@ -724,7 +741,7 @@ where
 /// binder depth, and finds late-bound regions targeting the
 /// `for<..`>.  For each of those, it creates an entry in
 /// `bound_region_scope`.
-struct ScopeInstantiator<'me, 'tcx: 'me> {
+struct ScopeInstantiator<'me, 'tcx> {
     next_region: &'me mut dyn FnMut(ty::BoundRegion) -> ty::Region<'tcx>,
     // The debruijn index of the scope we are instantiating.
     target_index: ty::DebruijnIndex,
@@ -781,11 +798,11 @@ impl<'me, 'tcx> TypeVisitor<'tcx> for ScopeInstantiator<'me, 'tcx> {
 /// scopes.
 ///
 /// [blog post]: https://is.gd/0hKvIr
-struct TypeGeneralizer<'me, 'gcx: 'tcx, 'tcx: 'me, D>
+struct TypeGeneralizer<'me, 'tcx, D>
 where
-    D: TypeRelatingDelegate<'tcx> + 'me,
+    D: TypeRelatingDelegate<'tcx>,
 {
-    infcx: &'me InferCtxt<'me, 'gcx, 'tcx>,
+    infcx: &'me InferCtxt<'me, 'tcx>,
 
     delegate: &'me mut D,
 
@@ -806,11 +823,11 @@ where
     universe: ty::UniverseIndex,
 }
 
-impl<D> TypeRelation<'me, 'gcx, 'tcx> for TypeGeneralizer<'me, 'gcx, 'tcx, D>
+impl<D> TypeRelation<'tcx> for TypeGeneralizer<'me, 'tcx, D>
 where
     D: TypeRelatingDelegate<'tcx>,
 {
-    fn tcx(&self) -> TyCtxt<'me, 'gcx, 'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
         self.infcx.tcx
     }
 
@@ -853,7 +870,7 @@ where
     fn tys(&mut self, a: Ty<'tcx>, _: Ty<'tcx>) -> RelateResult<'tcx, Ty<'tcx>> {
         use crate::infer::type_variable::TypeVariableValue;
 
-        debug!("TypeGeneralizer::tys(a={:?})", a,);
+        debug!("TypeGeneralizer::tys(a={:?})", a);
 
         match a.sty {
             ty::Infer(ty::TyVar(_)) | ty::Infer(ty::IntVar(_)) | ty::Infer(ty::FloatVar(_))
@@ -934,7 +951,7 @@ where
         a: ty::Region<'tcx>,
         _: ty::Region<'tcx>,
     ) -> RelateResult<'tcx, ty::Region<'tcx>> {
-        debug!("TypeGeneralizer::regions(a={:?})", a,);
+        debug!("TypeGeneralizer::regions(a={:?})", a);
 
         if let ty::ReLateBound(debruijn, _) = a {
             if *debruijn < self.first_free_index {
@@ -963,6 +980,23 @@ where
         Ok(replacement_region_vid)
     }
 
+    fn consts(
+        &mut self,
+        a: &'tcx ty::Const<'tcx>,
+        _: &'tcx ty::Const<'tcx>,
+    ) -> RelateResult<'tcx, &'tcx ty::Const<'tcx>> {
+        debug!("TypeGeneralizer::consts(a={:?})", a);
+
+        if let ty::Const { val: ConstValue::Infer(InferConst::Canonical(_, _)), .. } = a {
+            bug!(
+                "unexpected inference variable encountered in NLL generalization: {:?}",
+                a
+            );
+        } else {
+            relate::super_relate_consts(self, a, a)
+        }
+    }
+
     fn binders<T>(
         &mut self,
         a: &ty::Binder<T>,
@@ -971,7 +1005,7 @@ where
     where
         T: Relate<'tcx>,
     {
-        debug!("TypeGeneralizer::binders(a={:?})", a,);
+        debug!("TypeGeneralizer::binders(a={:?})", a);
 
         self.first_free_index.shift_in(1);
         let result = self.relate(a.skip_binder(), a.skip_binder())?;

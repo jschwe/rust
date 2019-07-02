@@ -6,16 +6,110 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use smallvec::SmallVec;
 
+/// This declares a list of types which can be allocated by `Arena`.
+///
+/// The `few` modifier will cause allocation to use the shared arena and recording the destructor.
+/// This is faster and more memory efficient if there's only a few allocations of the type.
+/// Leaving `few` out will cause the type to get its own dedicated `TypedArena` which is
+/// faster and more memory efficient if there is lots of allocations.
+///
+/// Specifying the `decode` modifier will add decode impls for &T and &[T] where T is the type
+/// listed. These impls will appear in the implement_ty_decoder! macro.
 #[macro_export]
 macro_rules! arena_types {
     ($macro:path, $args:tt, $tcx:lifetime) => (
         $macro!($args, [
+            [] layouts: rustc::ty::layout::LayoutDetails,
+            [] generics: rustc::ty::Generics,
+            [] trait_def: rustc::ty::TraitDef,
+            [] adt_def: rustc::ty::AdtDef,
+            [] steal_mir: rustc::ty::steal::Steal<rustc::mir::Body<$tcx>>,
+            [] mir: rustc::mir::Body<$tcx>,
+            [] tables: rustc::ty::TypeckTables<$tcx>,
+            [] const_allocs: rustc::mir::interpret::Allocation,
             [] vtable_method: Option<(
                 rustc::hir::def_id::DefId,
                 rustc::ty::subst::SubstsRef<$tcx>
             )>,
-            [few] mir_keys: rustc::util::nodemap::DefIdSet,
+            [few, decode] mir_keys: rustc::util::nodemap::DefIdSet,
             [decode] specialization_graph: rustc::traits::specialization_graph::Graph,
+            [] region_scope_tree: rustc::middle::region::ScopeTree,
+            [] item_local_set: rustc::util::nodemap::ItemLocalSet,
+            [decode] mir_const_qualif: rustc_data_structures::bit_set::BitSet<rustc::mir::Local>,
+            [] trait_impls_of: rustc::ty::trait_def::TraitImpls,
+            [] dropck_outlives:
+                rustc::infer::canonical::Canonical<'tcx,
+                    rustc::infer::canonical::QueryResponse<'tcx,
+                        rustc::traits::query::dropck_outlives::DropckOutlivesResult<'tcx>
+                    >
+                >,
+            [] normalize_projection_ty:
+                rustc::infer::canonical::Canonical<'tcx,
+                    rustc::infer::canonical::QueryResponse<'tcx,
+                        rustc::traits::query::normalize::NormalizationResult<'tcx>
+                    >
+                >,
+            [] implied_outlives_bounds:
+                rustc::infer::canonical::Canonical<'tcx,
+                    rustc::infer::canonical::QueryResponse<'tcx,
+                        Vec<rustc::traits::query::outlives_bounds::OutlivesBound<'tcx>>
+                    >
+                >,
+            [] type_op_subtype:
+                rustc::infer::canonical::Canonical<'tcx,
+                    rustc::infer::canonical::QueryResponse<'tcx, ()>
+                >,
+            [] type_op_normalize_poly_fn_sig:
+                rustc::infer::canonical::Canonical<'tcx,
+                    rustc::infer::canonical::QueryResponse<'tcx, rustc::ty::PolyFnSig<'tcx>>
+                >,
+            [] type_op_normalize_fn_sig:
+                rustc::infer::canonical::Canonical<'tcx,
+                    rustc::infer::canonical::QueryResponse<'tcx, rustc::ty::FnSig<'tcx>>
+                >,
+            [] type_op_normalize_predicate:
+                rustc::infer::canonical::Canonical<'tcx,
+                    rustc::infer::canonical::QueryResponse<'tcx, rustc::ty::Predicate<'tcx>>
+                >,
+            [] type_op_normalize_ty:
+                rustc::infer::canonical::Canonical<'tcx,
+                    rustc::infer::canonical::QueryResponse<'tcx, rustc::ty::Ty<'tcx>>
+                >,
+            [few] crate_inherent_impls: rustc::ty::CrateInherentImpls,
+            [decode] borrowck: rustc::middle::borrowck::BorrowCheckResult,
+            [few] upstream_monomorphizations:
+                rustc::util::nodemap::DefIdMap<
+                    rustc_data_structures::fx::FxHashMap<
+                        rustc::ty::subst::SubstsRef<'tcx>,
+                        rustc::hir::def_id::CrateNum
+                    >
+                >,
+            [few] resolve_lifetimes: rustc::middle::resolve_lifetime::ResolveLifetimes,
+            [decode] generic_predicates: rustc::ty::GenericPredicates<'tcx>,
+            [few] lint_levels: rustc::lint::LintLevelMap,
+            [few] stability_index: rustc::middle::stability::Index<'tcx>,
+            [few] features: syntax::feature_gate::Features,
+            [few] all_traits: Vec<rustc::hir::def_id::DefId>,
+            [few] privacy_access_levels: rustc::middle::privacy::AccessLevels,
+            [few] target_features_whitelist: rustc_data_structures::fx::FxHashMap<
+                String,
+                Option<syntax::symbol::Symbol>
+            >,
+            [few] wasm_import_module_map: rustc_data_structures::fx::FxHashMap<
+                rustc::hir::def_id::DefId,
+                String
+            >,
+            [few] get_lib_features: rustc::middle::lib_features::LibFeatures,
+            [few] defined_lib_features: rustc::middle::lang_items::LanguageItems,
+            [few] visible_parent_map: rustc::util::nodemap::DefIdMap<rustc::hir::def_id::DefId>,
+            [few] foreign_module: rustc::middle::cstore::ForeignModule,
+            [few] foreign_modules: Vec<rustc::middle::cstore::ForeignModule>,
+            [few] reachable_non_generics: rustc::util::nodemap::DefIdMap<
+                rustc::middle::exported_symbols::SymbolExportLevel
+            >,
+            [few] crate_variances: rustc::ty::CrateVariancesMap<'tcx>,
+            [few] inferred_outlives_crate: rustc::ty::CratePredicatesMap<'tcx>,
+            [] upvars: rustc_data_structures::fx::FxIndexMap<rustc::hir::HirId, rustc::hir::Upvar>,
         ], $tcx);
     )
 }
@@ -77,7 +171,7 @@ pub trait ArenaAllocatable {}
 
 impl<T: Copy> ArenaAllocatable for T {}
 
-pub unsafe trait ArenaField<'tcx>: Sized {
+unsafe trait ArenaField<'tcx>: Sized {
     /// Returns a specific arena to allocate from.
     /// If None is returned, the DropArena will be used.
     fn arena<'a>(arena: &'a Arena<'tcx>) -> Option<&'a TypedArena<Self>>;
@@ -100,6 +194,14 @@ impl<'tcx> Arena<'tcx> {
             Some(arena) => arena.alloc(value),
             None => unsafe { self.drop.alloc(value) },
         }
+    }
+
+    #[inline]
+    pub fn alloc_slice<T: Copy>(&self, value: &[T]) -> &mut [T] {
+        if value.len() == 0 {
+            return &mut []
+        }
+        self.dropless.alloc_slice(value)
     }
 
     pub fn alloc_from_iter<

@@ -9,7 +9,7 @@ pub use self::MatchMode::*;
 use self::TrackMatchMode::*;
 use self::OverloadedCallType::*;
 
-use crate::hir::def::{CtorOf, Def};
+use crate::hir::def::{CtorOf, Res, DefKind};
 use crate::hir::def_id::DefId;
 use crate::infer::InferCtxt;
 use crate::middle::mem_categorization as mc;
@@ -17,7 +17,6 @@ use crate::middle::region;
 use crate::ty::{self, DefIdTree, TyCtxt, adjustment};
 
 use crate::hir::{self, PatKind};
-use rustc_data_structures::sync::Lrc;
 use std::rc::Rc;
 use syntax::ptr::P;
 use syntax_pos::Span;
@@ -203,7 +202,7 @@ enum OverloadedCallType {
 }
 
 impl OverloadedCallType {
-    fn from_trait_id(tcx: TyCtxt<'_, '_, '_>, trait_id: DefId) -> OverloadedCallType {
+    fn from_trait_id(tcx: TyCtxt<'_>, trait_id: DefId) -> OverloadedCallType {
         for &(maybe_function_trait, overloaded_call_type) in &[
             (tcx.lang_items().fn_once_trait(), FnOnceOverloadedCall),
             (tcx.lang_items().fn_mut_trait(), FnMutOverloadedCall),
@@ -220,7 +219,7 @@ impl OverloadedCallType {
         bug!("overloaded call didn't map to known function trait")
     }
 
-    fn from_method_id(tcx: TyCtxt<'_, '_, '_>, method_id: DefId) -> OverloadedCallType {
+    fn from_method_id(tcx: TyCtxt<'_>, method_id: DefId) -> OverloadedCallType {
         let method = tcx.associated_item(method_id);
         OverloadedCallType::from_trait_id(tcx, method.container.id())
     }
@@ -230,8 +229,8 @@ impl OverloadedCallType {
 // The ExprUseVisitor type
 //
 // This is the code that actually walks the tree.
-pub struct ExprUseVisitor<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
-    mc: mc::MemCategorizationContext<'a, 'gcx, 'tcx>,
+pub struct ExprUseVisitor<'a, 'tcx> {
+    mc: mc::MemCategorizationContext<'a, 'tcx>,
     delegate: &'a mut dyn Delegate<'tcx>,
     param_env: ty::ParamEnv<'tcx>,
 }
@@ -255,7 +254,7 @@ macro_rules! return_if_err {
     )
 }
 
-impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx, 'tcx> {
+impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
     /// Creates the ExprUseVisitor, configuring it with the various options provided:
     ///
     /// - `delegate` -- who receives the callbacks
@@ -267,16 +266,18 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx, 'tcx> {
     ///   `None` means that rvalues will be given more conservative lifetimes.
     ///
     /// See also `with_infer`, which is used *during* typeck.
-    pub fn new(delegate: &'a mut (dyn Delegate<'tcx>+'a),
-               tcx: TyCtxt<'a, 'tcx, 'tcx>,
-               param_env: ty::ParamEnv<'tcx>,
-               region_scope_tree: &'a region::ScopeTree,
-               tables: &'a ty::TypeckTables<'tcx>,
-               rvalue_promotable_map: Option<Lrc<ItemLocalSet>>)
-               -> Self
-    {
+    pub fn new(
+        delegate: &'a mut (dyn Delegate<'tcx> + 'a),
+        tcx: TyCtxt<'tcx>,
+        body_owner: DefId,
+        param_env: ty::ParamEnv<'tcx>,
+        region_scope_tree: &'a region::ScopeTree,
+        tables: &'a ty::TypeckTables<'tcx>,
+        rvalue_promotable_map: Option<&'tcx ItemLocalSet>,
+    ) -> Self {
         ExprUseVisitor {
             mc: mc::MemCategorizationContext::new(tcx,
+                                                  body_owner,
                                                   region_scope_tree,
                                                   tables,
                                                   rvalue_promotable_map),
@@ -286,16 +287,22 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx, 'tcx> {
     }
 }
 
-impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
-    pub fn with_infer(delegate: &'a mut (dyn Delegate<'tcx>+'a),
-                      infcx: &'a InferCtxt<'a, 'gcx, 'tcx>,
-                      param_env: ty::ParamEnv<'tcx>,
-                      region_scope_tree: &'a region::ScopeTree,
-                      tables: &'a ty::TypeckTables<'tcx>)
-                      -> Self
-    {
+impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
+    pub fn with_infer(
+        delegate: &'a mut (dyn Delegate<'tcx> + 'a),
+        infcx: &'a InferCtxt<'a, 'tcx>,
+        body_owner: DefId,
+        param_env: ty::ParamEnv<'tcx>,
+        region_scope_tree: &'a region::ScopeTree,
+        tables: &'a ty::TypeckTables<'tcx>,
+    ) -> Self {
         ExprUseVisitor {
-            mc: mc::MemCategorizationContext::with_infer(infcx, region_scope_tree, tables),
+            mc: mc::MemCategorizationContext::with_infer(
+                infcx,
+                body_owner,
+                region_scope_tree,
+                tables,
+            ),
             delegate,
             param_env,
         }
@@ -326,7 +333,7 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
         self.consume_expr(&body.value);
     }
 
-    fn tcx(&self) -> TyCtxt<'a, 'gcx, 'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
         self.mc.tcx
     }
 
@@ -425,17 +432,9 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
                 self.consume_exprs(exprs);
             }
 
-            hir::ExprKind::If(ref cond_expr, ref then_expr, ref opt_else_expr) => {
-                self.consume_expr(&cond_expr);
-                self.walk_expr(&then_expr);
-                if let Some(ref else_expr) = *opt_else_expr {
-                    self.consume_expr(&else_expr);
-                }
-            }
-
             hir::ExprKind::Match(ref discr, ref arms, _) => {
                 let discr_cmt = Rc::new(return_if_err!(self.mc.cat_expr(&discr)));
-                let r = self.tcx().types.re_empty;
+                let r = self.tcx().lifetimes.re_empty;
                 self.borrow_expr(&discr, r, ty::ImmBorrow, MatchDiscriminant);
 
                 // treatment of the discriminant is handled while walking the arms.
@@ -521,6 +520,10 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
                 self.consume_expr(&base);
             }
 
+            hir::ExprKind::DropTemps(ref expr) => {
+                self.consume_expr(&expr);
+            }
+
             hir::ExprKind::AssignOp(_, ref lhs, ref rhs) => {
                 if self.mc.tables.is_method_call(expr) {
                     self.consume_expr(lhs);
@@ -543,7 +546,7 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
                 self.consume_expr(&base);
             }
 
-            hir::ExprKind::Yield(ref value) => {
+            hir::ExprKind::Yield(ref value, _) => {
                 self.consume_expr(&value);
             }
         }
@@ -859,8 +862,8 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
 
                     // Each match binding is effectively an assignment to the
                     // binding being produced.
-                    let def = Def::Local(canonical_id);
-                    if let Ok(ref binding_cmt) = mc.cat_def(pat.hir_id, pat.span, pat_ty, def) {
+                    let def = Res::Local(canonical_id);
+                    if let Ok(ref binding_cmt) = mc.cat_res(pat.hir_id, pat.span, pat_ty, def) {
                         delegate.mutate(pat.hir_id, pat.span, binding_cmt, MutateMode::Init);
                     }
 
@@ -895,23 +898,27 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
                 PatKind::Struct(ref qpath, ..) => qpath,
                 _ => return
             };
-            let def = mc.tables.qpath_def(qpath, pat.hir_id);
-            match def {
-                Def::Ctor(variant_ctor_did, CtorOf::Variant, ..) => {
+            let res = mc.tables.qpath_res(qpath, pat.hir_id);
+            match res {
+                Res::Def(DefKind::Ctor(CtorOf::Variant, ..), variant_ctor_did) => {
                     let variant_did = mc.tcx.parent(variant_ctor_did).unwrap();
                     let downcast_cmt = mc.cat_downcast_if_needed(pat, cmt_pat, variant_did);
 
                     debug!("variantctor downcast_cmt={:?} pat={:?}", downcast_cmt, pat);
                     delegate.matched_pat(pat, &downcast_cmt, match_mode);
                 }
-                Def::Variant(variant_did) => {
+                Res::Def(DefKind::Variant, variant_did) => {
                     let downcast_cmt = mc.cat_downcast_if_needed(pat, cmt_pat, variant_did);
 
                     debug!("variant downcast_cmt={:?} pat={:?}", downcast_cmt, pat);
                     delegate.matched_pat(pat, &downcast_cmt, match_mode);
                 }
-                Def::Struct(..) | Def::Ctor(..) | Def::Union(..) |
-                Def::TyAlias(..) | Def::AssociatedTy(..) | Def::SelfTy(..) => {
+                Res::Def(DefKind::Struct, _)
+                | Res::Def(DefKind::Ctor(..), _)
+                | Res::Def(DefKind::Union, _)
+                | Res::Def(DefKind::TyAlias, _)
+                | Res::Def(DefKind::AssocTy, _)
+                | Res::SelfTy(..) => {
                     debug!("struct cmt_pat={:?} pat={:?}", cmt_pat, pat);
                     delegate.matched_pat(pat, &cmt_pat, match_mode);
                 }
@@ -924,24 +931,23 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
         debug!("walk_captures({:?})", closure_expr);
 
         let closure_def_id = self.tcx().hir().local_def_id_from_hir_id(closure_expr.hir_id);
-        self.tcx().with_freevars(closure_expr.hir_id, |freevars| {
-            for freevar in freevars {
-                let var_hir_id = freevar.var_id();
+        if let Some(upvars) = self.tcx().upvars(closure_def_id) {
+            for (&var_id, upvar) in upvars.iter() {
                 let upvar_id = ty::UpvarId {
-                    var_path: ty::UpvarPath { hir_id: var_hir_id },
+                    var_path: ty::UpvarPath { hir_id: var_id },
                     closure_expr_id: closure_def_id.to_local(),
                 };
                 let upvar_capture = self.mc.tables.upvar_capture(upvar_id);
                 let cmt_var = return_if_err!(self.cat_captured_var(closure_expr.hir_id,
                                                                    fn_decl_span,
-                                                                   freevar));
+                                                                   var_id));
                 match upvar_capture {
                     ty::UpvarCapture::ByValue => {
                         let mode = copy_or_move(&self.mc,
                                                 self.param_env,
                                                 &cmt_var,
                                                 CaptureMove);
-                        self.delegate.consume(closure_expr.hir_id, freevar.span, &cmt_var, mode);
+                        self.delegate.consume(closure_expr.hir_id, upvar.span, &cmt_var, mode);
                     }
                     ty::UpvarCapture::ByRef(upvar_borrow) => {
                         self.delegate.borrow(closure_expr.hir_id,
@@ -949,32 +955,31 @@ impl<'a, 'gcx, 'tcx> ExprUseVisitor<'a, 'gcx, 'tcx> {
                                              &cmt_var,
                                              upvar_borrow.region,
                                              upvar_borrow.kind,
-                                             ClosureCapture(freevar.span));
+                                             ClosureCapture(upvar.span));
                     }
                 }
             }
-        });
+        }
     }
 
     fn cat_captured_var(&mut self,
                         closure_hir_id: hir::HirId,
                         closure_span: Span,
-                        upvar: &hir::Freevar)
+                        var_id: hir::HirId)
                         -> mc::McResult<mc::cmt_<'tcx>> {
         // Create the cmt for the variable being borrowed, from the
-        // caller's perspective
-        let var_hir_id = upvar.var_id();
-        let var_ty = self.mc.node_ty(var_hir_id)?;
-        self.mc.cat_def(closure_hir_id, closure_span, var_ty, upvar.def)
+        // perspective of the creator (parent) of the closure.
+        let var_ty = self.mc.node_ty(var_id)?;
+        self.mc.cat_res(closure_hir_id, closure_span, var_ty, Res::Local(var_id))
     }
 }
 
-fn copy_or_move<'a, 'gcx, 'tcx>(mc: &mc::MemCategorizationContext<'a, 'gcx, 'tcx>,
-                                param_env: ty::ParamEnv<'tcx>,
-                                cmt: &mc::cmt_<'tcx>,
-                                move_reason: MoveReason)
-                                -> ConsumeMode
-{
+fn copy_or_move<'a, 'tcx>(
+    mc: &mc::MemCategorizationContext<'a, 'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
+    cmt: &mc::cmt_<'tcx>,
+    move_reason: MoveReason,
+) -> ConsumeMode {
     if !mc.type_is_copy_modulo_regions(param_env, cmt.ty, cmt.span) {
         Move(move_reason)
     } else {

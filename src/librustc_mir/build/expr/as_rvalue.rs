@@ -12,7 +12,7 @@ use rustc::mir::*;
 use rustc::ty::{self, CanonicalUserTypeAnnotation, Ty, UpvarSubsts};
 use syntax_pos::Span;
 
-impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
+impl<'a, 'tcx> Builder<'a, 'tcx> {
     /// See comment on `as_local_operand`
     pub fn as_local_rvalue<M>(&mut self, block: BasicBlock, expr: M) -> BlockAnd<Rvalue<'tcx>>
     where
@@ -58,7 +58,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 value,
             } => {
                 let region_scope = (region_scope, source_info);
-                this.in_scope(region_scope, lint_level, block, |this| {
+                this.in_scope(region_scope, lint_level, |this| {
                     this.as_rvalue(block, scope, value)
                 })
             }
@@ -74,7 +74,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                     BorrowKind::Shared => unpack!(block = this.as_read_only_place(block, arg)),
                     _ => unpack!(block = this.as_place(block, arg)),
                 };
-                block.and(Rvalue::Ref(this.hir.tcx().types.re_erased, borrow_kind, arg_place))
+                block.and(Rvalue::Ref(this.hir.tcx().lifetimes.re_erased, borrow_kind, arg_place))
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 let lhs = unpack!(block = this.as_operand(block, scope, lhs));
@@ -127,7 +127,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                     this.schedule_drop_storage_and_value(
                         expr_span,
                         scope,
-                        &Place::Base(PlaceBase::Local(result)),
+                        result,
                         value.ty,
                     );
                 }
@@ -135,24 +135,20 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 // malloc some memory of suitable type (thus far, uninitialized):
                 let box_ = Rvalue::NullaryOp(NullOp::Box, value.ty);
                 this.cfg
-                    .push_assign(block, source_info, &Place::Base(PlaceBase::Local(result)), box_);
+                    .push_assign(block, source_info, &Place::from(result), box_);
 
                 // initialize the box contents:
                 unpack!(
                     block = this.into(
-                        &Place::Base(PlaceBase::Local(result)).deref(),
+                        &Place::from(result).deref(),
                         block, value
                     )
                 );
-                block.and(Rvalue::Use(Operand::Move(Place::Base(PlaceBase::Local(result)))))
+                block.and(Rvalue::Use(Operand::Move(Place::from(result))))
             }
             ExprKind::Cast { source } => {
                 let source = unpack!(block = this.as_operand(block, scope, source));
                 block.and(Rvalue::Cast(CastKind::Misc, source, expr.ty))
-            }
-            ExprKind::Use { source } => {
-                let source = unpack!(block = this.as_operand(block, scope, source));
-                block.and(Rvalue::Use(source))
             }
             ExprKind::Pointer { cast, source } => {
                 let source = unpack!(block = this.as_operand(block, scope, source));
@@ -211,7 +207,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 movability,
             } => {
                 // see (*) above
-                let mut operands: Vec<_> = upvars
+                let operands: Vec<_> = upvars
                     .into_iter()
                     .map(|upvar| {
                         let upvar = this.hir.mirror(upvar);
@@ -252,21 +248,9 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                     }).collect();
                 let result = match substs {
                     UpvarSubsts::Generator(substs) => {
+                        // We implicitly set the discriminant to 0. See
+                        // librustc_mir/transform/deaggregator.rs for details.
                         let movability = movability.unwrap();
-                        // Add the state operand since it follows the upvars in the generator
-                        // struct. See librustc_mir/transform/generator.rs for more details.
-                        operands.push(Operand::Constant(box Constant {
-                            span: expr_span,
-                            ty: this.hir.tcx().types.u32,
-                            user_ty: None,
-                            literal: this.hir.tcx().mk_const(
-                                ty::Const::from_bits(
-                                    this.hir.tcx(),
-                                    0,
-                                    ty::ParamEnv::empty().and(this.hir.tcx().types.u32),
-                                ),
-                            ),
-                        }));
                         box AggregateKind::Generator(closure_id, substs, movability)
                     }
                     UpvarSubsts::Closure(substs) => box AggregateKind::Closure(closure_id, substs),
@@ -361,8 +345,8 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             ExprKind::Literal { .. }
             | ExprKind::Block { .. }
             | ExprKind::Match { .. }
-            | ExprKind::If { .. }
             | ExprKind::NeverToAny { .. }
+            | ExprKind::Use { .. }
             | ExprKind::Loop { .. }
             | ExprKind::LogicalOp { .. }
             | ExprKind::Call { .. }
@@ -519,13 +503,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 elem: ProjectionElem::Deref,
             }) => {
                 debug_assert!(
-                    if let Some(ClearCrossCrate::Set(BindingForm::RefForGuard)) =
-                        this.local_decls[local].is_user_variable
-                    {
-                        true
-                    } else {
-                        false
-                    },
+                    this.local_decls[local].is_ref_for_guard(),
                     "Unexpected capture place",
                 );
                 this.local_decls[local].mutability
@@ -544,22 +522,18 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             }) => {
                 // Not projected from the implicit `self` in a closure.
                 debug_assert!(
-                    match *base {
-                        Place::Base(PlaceBase::Local(local)) => local == Local::new(1),
-                        Place::Projection(box Projection {
-                            ref base,
-                            elem: ProjectionElem::Deref,
-                        }) => *base == Place::Base(PlaceBase::Local(Local::new(1))),
-                        _ => false,
+                    match base.local_or_deref_local() {
+                        Some(local) => local == Local::new(1),
+                        None => false,
                     },
                     "Unexpected capture place"
                 );
                 // Not in a closure
                 debug_assert!(
-                    this.upvar_decls.len() > upvar_index.index(),
+                    this.upvar_mutbls.len() > upvar_index.index(),
                     "Unexpected capture place"
                 );
-                this.upvar_decls[upvar_index.index()].mutability
+                this.upvar_mutbls[upvar_index.index()]
             }
             _ => bug!("Unexpected capture place"),
         };
@@ -574,8 +548,8 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         this.cfg.push_assign(
             block,
             source_info,
-            &Place::Base(PlaceBase::Local(temp)),
-            Rvalue::Ref(this.hir.tcx().types.re_erased, borrow_kind, arg_place),
+            &Place::from(temp),
+            Rvalue::Ref(this.hir.tcx().lifetimes.re_erased, borrow_kind, arg_place),
         );
 
         // In constants, temp_lifetime is None. We should not need to drop
@@ -585,17 +559,17 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             this.schedule_drop_storage_and_value(
                 upvar_span,
                 temp_lifetime,
-                &Place::Base(PlaceBase::Local(temp)),
+                temp,
                 upvar_ty,
             );
         }
 
-        block.and(Operand::Move(Place::Base(PlaceBase::Local(temp))))
+        block.and(Operand::Move(Place::from(temp)))
     }
 
     // Helper to get a `-1` value of the appropriate type
     fn neg_1_literal(&mut self, span: Span, ty: Ty<'tcx>) -> Operand<'tcx> {
-        let param_ty = ty::ParamEnv::empty().and(self.hir.tcx().lift_to_global(&ty).unwrap());
+        let param_ty = ty::ParamEnv::empty().and(ty);
         let bits = self.hir.tcx().layout_of(param_ty).unwrap().size.bits();
         let n = (!0u128) >> (128 - bits);
         let literal = ty::Const::from_bits(self.hir.tcx(), n, param_ty);
@@ -606,7 +580,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
     // Helper to get the minimum value of the appropriate type
     fn minval_literal(&mut self, span: Span, ty: Ty<'tcx>) -> Operand<'tcx> {
         assert!(ty.is_signed());
-        let param_ty = ty::ParamEnv::empty().and(self.hir.tcx().lift_to_global(&ty).unwrap());
+        let param_ty = ty::ParamEnv::empty().and(ty);
         let bits = self.hir.tcx().layout_of(param_ty).unwrap().size.bits();
         let n = 1 << (bits - 1);
         let literal = ty::Const::from_bits(self.hir.tcx(), n, param_ty);

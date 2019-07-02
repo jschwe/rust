@@ -15,7 +15,7 @@ use rustc::session::Session;
 use rustc::session::config::OutputFilenames;
 use rustc::ty::TyCtxt;
 use rustc::ty::query::Providers;
-use rustc::middle::cstore::MetadataLoader;
+use rustc::middle::cstore::{EncodedMetadata, MetadataLoader};
 use rustc::dep_graph::DepGraph;
 use rustc::util::common::ErrorReported;
 use rustc_codegen_utils::codegen_backend::CodegenBackend;
@@ -47,8 +47,8 @@ impl CodegenBackend for TheBackend {
     fn provide(&self, providers: &mut Providers) {
         rustc_codegen_utils::symbol_names::provide(providers);
 
-        providers.target_features_whitelist = |_tcx, _cnum| {
-            Default::default() // Just a dummy
+        providers.target_features_whitelist = |tcx, _cnum| {
+            tcx.arena.alloc(Default::default()) // Just a dummy
         };
         providers.is_reachable_non_generic = |_tcx, _defid| true;
         providers.exported_symbols = |_tcx, _crate| Arc::new(Vec::new());
@@ -60,7 +60,9 @@ impl CodegenBackend for TheBackend {
 
     fn codegen_crate<'a, 'tcx>(
         &self,
-        tcx: TyCtxt<'a, 'tcx, 'tcx>,
+        tcx: TyCtxt<'tcx>,
+        _metadata: EncodedMetadata,
+        _need_metadata_module: bool,
         _rx: mpsc::Receiver<Box<Any + Send>>
     ) -> Box<Any> {
         use rustc::hir::def_id::LOCAL_CRATE;

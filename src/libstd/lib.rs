@@ -223,11 +223,12 @@
 #![cfg_attr(all(target_vendor = "fortanix", target_env = "sgx"),
             feature(global_asm, slice_index_methods,
                     decl_macro, coerce_unsized, sgx_platform, ptr_wrapping_offset_from))]
+#![cfg_attr(all(test, target_vendor = "fortanix", target_env = "sgx"),
+            feature(fixed_size_array, maybe_uninit_extra))]
 
 // std is implemented with unstable features, many of which are internal
 // compiler details that will never be stable
 // NB: the following list is sorted to minimize merge conflicts.
-#![feature(align_offset)]
 #![feature(alloc_error_handler)]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
@@ -261,20 +262,17 @@
 #![feature(exact_size_is_empty)]
 #![feature(exhaustive_patterns)]
 #![feature(external_doc)]
-#![feature(fixed_size_array)]
 #![feature(fn_traits)]
-#![feature(fnbox)]
-#![feature(futures_api)]
 #![feature(generator_trait)]
 #![feature(hash_raw_entry)]
 #![feature(hashmap_internals)]
 #![feature(int_error_internals)]
+#![feature(int_error_matching)]
 #![feature(integer_atomics)]
 #![feature(lang_items)]
 #![feature(libc)]
 #![feature(link_args)]
 #![feature(linkage)]
-#![feature(maybe_uninit)]
 #![feature(needs_panic_runtime)]
 #![feature(never_type)]
 #![feature(nll)]
@@ -337,6 +335,12 @@ extern crate libc;
 #[doc(masked)]
 #[allow(unused_extern_crates)]
 extern crate unwind;
+
+// Only needed for now for the `std_detect` module until that crate changes to
+// use `cfg_if::cfg_if!`
+#[macro_use]
+#[cfg(not(test))]
+extern crate cfg_if;
 
 // During testing, this crate is not actually the "real" std library, but rather
 // it links to the real std library, which was compiled from this same source
@@ -437,6 +441,8 @@ pub use core::char;
 pub use core::u128;
 #[stable(feature = "core_hint", since = "1.27.0")]
 pub use core::hint;
+#[stable(feature = "core_array", since = "1.36.0")]
+pub use core::array;
 
 pub mod f32;
 pub mod f64;
@@ -459,18 +465,15 @@ pub mod process;
 pub mod sync;
 pub mod time;
 
-#[unstable(feature = "futures_api",
-           reason = "futures in libcore are unstable",
-           issue = "50547")]
+#[stable(feature = "futures_api", since = "1.36.0")]
 pub mod task {
     //! Types and Traits for working with asynchronous tasks.
     #[doc(inline)]
+    #[stable(feature = "futures_api", since = "1.36.0")]
     pub use core::task::*;
 }
 
-#[unstable(feature = "futures_api",
-           reason = "futures in libcore are unstable",
-           issue = "50547")]
+#[stable(feature = "futures_api", since = "1.36.0")]
 pub mod future;
 
 // Platform-abstraction modules

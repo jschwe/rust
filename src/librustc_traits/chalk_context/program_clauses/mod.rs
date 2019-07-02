@@ -10,7 +10,7 @@ use rustc::traits::{
     ProgramClauseCategory,
     Environment,
 };
-use rustc::ty;
+use rustc::ty::{self, TyCtxt};
 use rustc::hir::def_id::DefId;
 use super::ChalkInferenceContext;
 use std::iter;
@@ -19,9 +19,9 @@ use self::primitive::*;
 use self::builtin::*;
 
 fn assemble_clauses_from_impls<'tcx>(
-    tcx: ty::TyCtxt<'_, '_, 'tcx>,
+    tcx: TyCtxt<'tcx>,
     trait_def_id: DefId,
-    clauses: &mut Vec<Clause<'tcx>>
+    clauses: &mut Vec<Clause<'tcx>>,
 ) {
     tcx.for_each_impl(trait_def_id, |impl_def_id| {
         clauses.extend(
@@ -33,9 +33,9 @@ fn assemble_clauses_from_impls<'tcx>(
 }
 
 fn assemble_clauses_from_assoc_ty_values<'tcx>(
-    tcx: ty::TyCtxt<'_, '_, 'tcx>,
+    tcx: TyCtxt<'tcx>,
     trait_def_id: DefId,
-    clauses: &mut Vec<Clause<'tcx>>
+    clauses: &mut Vec<Clause<'tcx>>,
 ) {
     tcx.for_each_impl(trait_def_id, |impl_def_id| {
         for def_id in tcx.associated_item_def_ids(impl_def_id).iter() {
@@ -48,7 +48,7 @@ fn assemble_clauses_from_assoc_ty_values<'tcx>(
     });
 }
 
-impl ChalkInferenceContext<'cx, 'gcx, 'tcx> {
+impl ChalkInferenceContext<'cx, 'tcx> {
     pub(super) fn program_clauses_impl(
         &self,
         environment: &Environment<'tcx>,
@@ -57,7 +57,7 @@ impl ChalkInferenceContext<'cx, 'gcx, 'tcx> {
         use rustc::traits::WhereClause::*;
         use rustc::infer::canonical::OriginalQueryValues;
 
-        let goal = self.infcx.resolve_type_vars_if_possible(goal);
+        let goal = self.infcx.resolve_vars_if_possible(goal);
 
         debug!("program_clauses(goal = {:?})", goal);
 
@@ -96,8 +96,27 @@ impl ChalkInferenceContext<'cx, 'gcx, 'tcx> {
                     );
                 }
 
+                if Some(trait_predicate.def_id()) == self.infcx.tcx.lang_items().copy_trait() {
+                    assemble_builtin_copy_clone_impls(
+                        self.infcx.tcx,
+                        trait_predicate.def_id(),
+                        trait_predicate.self_ty(),
+                        &mut clauses
+                    );
+                }
+
+                if Some(trait_predicate.def_id()) == self.infcx.tcx.lang_items().clone_trait() {
+                    // For all builtin impls, the conditions for `Copy` and
+                    // `Clone` are the same.
+                    assemble_builtin_copy_clone_impls(
+                        self.infcx.tcx,
+                        trait_predicate.def_id(),
+                        trait_predicate.self_ty(),
+                        &mut clauses
+                    );
+                }
+
                 // FIXME: we need to add special rules for other builtin impls:
-                // * `Copy` / `Clone`
                 // * `Generator`
                 // * `FnOnce` / `FnMut` / `Fn`
                 // * trait objects

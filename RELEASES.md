@@ -1,3 +1,221 @@
+Version 1.36.0 (2019-07-04)
+==========================
+
+Language
+--------
+- [Non-Lexical Lifetimes are now enabled on the 2015 edition.][59114]
+- [The order of traits in trait objects no longer affects the semantics of that
+  object.][59445] e.g. `dyn Send + fmt::Debug` is now equivalent to
+  `dyn fmt::Debug + Send`, where this was previously not the case.
+
+Libraries
+---------
+- [`HashMap`'s implementation has been replaced with `hashbrown::HashMap` implementation.][58623]
+- [`TryFromSliceError` now implements `From<Infallible>`.][60318]
+- [`mem::needs_drop` is now available as a const fn.][60364]
+- [`alloc::Layout::from_size_align_unchecked` is now available as a const fn.][60370]
+- [`String` now implements `BorrowMut<str>`.][60404]
+- [`io::Cursor` now implements `Default`.][60234]
+- [Both `NonNull::{dangling, cast}` are now const fns.][60244]
+- [The `alloc` crate is now stable.][59675] `alloc` allows you to use a subset
+  of `std` (e.g. `Vec`, `Box`, `Arc`) in `#![no_std]` environments if the
+  environment has access to heap memory allocation.
+- [`String` now implements `From<&String>`.][59825]
+- [You can now pass multiple arguments to the `dbg!` macro.][59826] `dbg!` will
+  return a tuple of each argument when there is multiple arguments.
+- [`Result::{is_err, is_ok}` are now `#[must_use]` and will produce a warning if
+  not used.][59648]
+
+Stabilized APIs
+---------------
+- [`VecDeque::rotate_left`]
+- [`VecDeque::rotate_right`]
+- [`Iterator::copied`]
+- [`io::IoSlice`]
+- [`io::IoSliceMut`]
+- [`Read::read_vectored`]
+- [`Write::write_vectored`]
+- [`str::as_mut_ptr`]
+- [`mem::MaybeUninit`]
+- [`pointer::align_offset`]
+- [`future::Future`]
+- [`task::Context`] 
+- [`task::RawWaker`]
+- [`task::RawWakerVTable`]
+- [`task::Waker`]
+- [`task::Poll`]
+
+Cargo
+-----
+- [Cargo will now produce an error if you attempt to use the name of a required dependency as a feature.][cargo/6860]
+- [You can now pass the `--offline` flag to run cargo without accessing the network.][cargo/6934]
+
+You can find further change's in [Cargo's 1.36.0 release notes][cargo-1-36-0].
+
+Clippy
+------
+There have been numerous additions and fixes to clippy, see [Clippy's 1.36.0 release notes][clippy-1-36-0] for more details.
+
+Misc
+----
+
+Compatibility Notes
+-------------------
+- With the stabilisation of `mem::MaybeUninit`, `mem::uninitialized` use is no
+  longer recommended, and will be deprecated in 1.38.0.
+
+[60318]: https://github.com/rust-lang/rust/pull/60318/
+[60364]: https://github.com/rust-lang/rust/pull/60364/
+[60370]: https://github.com/rust-lang/rust/pull/60370/
+[60404]: https://github.com/rust-lang/rust/pull/60404/
+[60234]: https://github.com/rust-lang/rust/pull/60234/
+[60244]: https://github.com/rust-lang/rust/pull/60244/
+[58623]: https://github.com/rust-lang/rust/pull/58623/
+[59648]: https://github.com/rust-lang/rust/pull/59648/
+[59675]: https://github.com/rust-lang/rust/pull/59675/
+[59825]: https://github.com/rust-lang/rust/pull/59825/
+[59826]: https://github.com/rust-lang/rust/pull/59826/
+[59445]: https://github.com/rust-lang/rust/pull/59445/
+[59114]: https://github.com/rust-lang/rust/pull/59114/
+[cargo/6860]: https://github.com/rust-lang/cargo/pull/6860/
+[cargo/6934]: https://github.com/rust-lang/cargo/pull/6934/
+[`VecDeque::rotate_left`]: https://doc.rust-lang.org/std/collections/struct.VecDeque.html#method.rotate_left
+[`VecDeque::rotate_right`]: https://doc.rust-lang.org/std/collections/struct.VecDeque.html#method.rotate_right
+[`Iterator::copied`]: https://doc.rust-lang.org/std/iter/trait.Iterator.html#tymethod.copied
+[`io::IoSlice`]: https://doc.rust-lang.org/std/io/struct.IoSlice.html
+[`io::IoSliceMut`]: https://doc.rust-lang.org/std/io/struct.IoSliceMut.html
+[`Read::read_vectored`]: https://doc.rust-lang.org/std/io/trait.Read.html#method.read_vectored
+[`Write::write_vectored`]: https://doc.rust-lang.org/std/io/trait.Write.html#method.write_vectored
+[`str::as_mut_ptr`]: https://doc.rust-lang.org/std/primitive.str.html#method.as_mut_ptr
+[`mem::MaybeUninit`]: https://doc.rust-lang.org/std/mem/union.MaybeUninit.html
+[`pointer::align_offset`]: https://doc.rust-lang.org/std/primitive.pointer.html#method.align_offset
+[`future::Future`]: https://doc.rust-lang.org/std/future/trait.Future.html
+[`task::Context`]: https://doc.rust-lang.org/beta/std/task/struct.Context.html
+[`task::RawWaker`]: https://doc.rust-lang.org/beta/std/task/struct.RawWaker.html
+[`task::RawWakerVTable`]: https://doc.rust-lang.org/beta/std/task/struct.RawWakerVTable.html
+[`task::Waker`]: https://doc.rust-lang.org/beta/std/task/struct.Waker.html
+[`task::Poll`]: https://doc.rust-lang.org/beta/std/task/enum.Poll.html
+[clippy-1-36-0]: https://github.com/rust-lang/rust-clippy/blob/master/CHANGELOG.md#rust-136
+[cargo-1-36-0]: https://github.com/rust-lang/cargo/blob/master/CHANGELOG.md#cargo-136-2019-07-04
+
+
+Version 1.35.0 (2019-05-23)
+==========================
+
+Language
+--------
+- [`FnOnce`, `FnMut`, and the `Fn` traits are now implemented for `Box<FnOnce>`,
+  `Box<FnMut>`, and `Box<Fn>` respectively.][59500]
+- [You can now coerce closures into unsafe function pointers.][59580] e.g.
+  ```rust
+  unsafe fn call_unsafe(func: unsafe fn()) {
+      func()
+  }
+
+  pub fn main() {
+      unsafe { call_unsafe(|| {}); }
+  }
+  ```
+
+
+Compiler
+--------
+- [Added the `armv6-unknown-freebsd-gnueabihf` and
+  `armv7-unknown-freebsd-gnueabihf` targets.][58080]
+- [Added the `wasm32-unknown-wasi` target.][59464]
+
+
+Libraries
+---------
+- [`Thread` will now show its ID in `Debug` output.][59460]
+- [`StdinLock`, `StdoutLock`, and `StderrLock` now implement `AsRawFd`.][59512]
+- [`alloc::System` now implements `Default`.][59451]
+- [Expanded `Debug` output (`{:#?}`) for structs now has a trailing comma on the
+  last field.][59076]
+- [`char::{ToLowercase, ToUppercase}` now
+  implement `ExactSizeIterator`.][58778]
+- [All `NonZero` numeric types now implement `FromStr`.][58717]
+- [Removed the `Read` trait bounds
+  on the `BufReader::{get_ref, get_mut, into_inner}` methods.][58423]
+- [You can now call the `dbg!` macro without any parameters to print the file
+  and line where it is called.][57847]
+- [In place ASCII case conversions are now up to 4× faster.][59283]
+  e.g. `str::make_ascii_lowercase`
+- [`hash_map::{OccupiedEntry, VacantEntry}` now implement `Sync`
+  and `Send`.][58369]
+
+Stabilized APIs
+---------------
+- [`f32::copysign`]
+- [`f64::copysign`]
+- [`RefCell::replace_with`]
+- [`RefCell::map_split`]
+- [`ptr::hash`]
+- [`Range::contains`]
+- [`RangeFrom::contains`]
+- [`RangeTo::contains`]
+- [`RangeInclusive::contains`]
+- [`RangeToInclusive::contains`]
+- [`Option::copied`]
+
+Cargo
+-----
+- [You can now set `cargo:rustc-cdylib-link-arg` at build time to pass custom
+  linker arguments when building a `cdylib`.][cargo/6298] Its usage is highly
+  platform specific.
+
+Misc
+----
+- [The Rust toolchain is now available natively for musl based distros.][58575]
+
+[59460]: https://github.com/rust-lang/rust/pull/59460/
+[59464]: https://github.com/rust-lang/rust/pull/59464/
+[59500]: https://github.com/rust-lang/rust/pull/59500/
+[59512]: https://github.com/rust-lang/rust/pull/59512/
+[59580]: https://github.com/rust-lang/rust/pull/59580/
+[59283]: https://github.com/rust-lang/rust/pull/59283/
+[59451]: https://github.com/rust-lang/rust/pull/59451/
+[59076]: https://github.com/rust-lang/rust/pull/59076/
+[58778]: https://github.com/rust-lang/rust/pull/58778/
+[58717]: https://github.com/rust-lang/rust/pull/58717/
+[58369]: https://github.com/rust-lang/rust/pull/58369/
+[58423]: https://github.com/rust-lang/rust/pull/58423/
+[58080]: https://github.com/rust-lang/rust/pull/58080/
+[57847]: https://github.com/rust-lang/rust/pull/57847/
+[58575]: https://github.com/rust-lang/rust/pull/58575
+[cargo/6298]: https://github.com/rust-lang/cargo/pull/6298/
+[`f32::copysign`]: https://doc.rust-lang.org/stable/std/primitive.f32.html#method.copysign
+[`f64::copysign`]: https://doc.rust-lang.org/stable/std/primitive.f64.html#method.copysign
+[`RefCell::replace_with`]: https://doc.rust-lang.org/stable/std/cell/struct.RefCell.html#method.replace_with
+[`RefCell::map_split`]: https://doc.rust-lang.org/stable/std/cell/struct.RefCell.html#method.map_split
+[`ptr::hash`]: https://doc.rust-lang.org/stable/std/ptr/fn.hash.html
+[`Range::contains`]: https://doc.rust-lang.org/std/ops/struct.Range.html#method.contains
+[`RangeFrom::contains`]: https://doc.rust-lang.org/std/ops/struct.RangeFrom.html#method.contains
+[`RangeTo::contains`]: https://doc.rust-lang.org/std/ops/struct.RangeTo.html#method.contains
+[`RangeInclusive::contains`]: https://doc.rust-lang.org/std/ops/struct.RangeInclusive.html#method.contains
+[`RangeToInclusive::contains`]: https://doc.rust-lang.org/std/ops/struct.RangeToInclusive.html#method.contains
+[`Option::copied`]: https://doc.rust-lang.org/std/option/enum.Option.html#method.copied
+
+Version 1.34.2 (2019-05-14)
+===========================
+
+* [Destabilize the `Error::type_id` function due to a security
+   vulnerability][60785] ([CVE-2019-12083])
+
+[60785]: https://github.com/rust-lang/rust/pull/60785
+[CVE-2019-12083]: https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-12083
+
+Version 1.34.1 (2019-04-25)
+===========================
+
+* [Fix false positives for the `redundant_closure` Clippy lint][clippy/3821]
+* [Fix false positives for the `missing_const_for_fn` Clippy lint][clippy/3844]
+* [Fix Clippy panic when checking some macros][clippy/3805]
+
+[clippy/3821]: https://github.com/rust-lang/rust-clippy/pull/3821
+[clippy/3844]: https://github.com/rust-lang/rust-clippy/pull/3844
+[clippy/3805]: https://github.com/rust-lang/rust-clippy/pull/3805
+
 Version 1.34.0 (2019-04-11)
 ==========================
 
@@ -40,7 +258,7 @@ Libraries
   produce a warning if their returning type is unused.
 - [The methods `checked_pow`, `saturating_pow`, `wrapping_pow`, and
   `overflowing_pow` are now available for all numeric types.][57873] These are
-  equivalvent to methods such as `wrapping_add` for the `pow` operation.
+  equivalent to methods such as `wrapping_add` for the `pow` operation.
 
 
 Stabilized APIs
@@ -91,9 +309,9 @@ Misc
 
 Compatibility Notes
 -------------------
-- [`Command::before_exec` is now deprecated in favor of the
-  unsafe method `Command::pre_exec`.][58059]
-- [Use of `ATOMIC_{BOOL, ISIZE, USIZE}_INIT` is now deprecated.][57425] As you
+- [`Command::before_exec` is being replaced by the unsafe method
+  `Command::pre_exec`][58059] and will be deprecated with Rust 1.37.0.
+- [Use of `ATOMIC_{BOOL, ISIZE, USIZE}_INIT` is now deprecated][57425] as you
   can now use `const` functions in `static` variables.
 
 [58370]: https://github.com/rust-lang/rust/pull/58370/

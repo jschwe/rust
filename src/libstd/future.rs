@@ -9,18 +9,21 @@ use core::task::{Context, Poll};
 use core::ops::{Drop, Generator, GeneratorState};
 
 #[doc(inline)]
+#[stable(feature = "futures_api", since = "1.36.0")]
 pub use core::future::*;
 
 /// Wrap a generator in a future.
 ///
 /// This function returns a `GenFuture` underneath, but hides it in `impl Trait` to give
 /// better error messages (`impl Future` rather than `GenFuture<[closure.....]>`).
+#[doc(hidden)]
 #[unstable(feature = "gen_future", issue = "50547")]
 pub fn from_generator<T: Generator<Yield = ()>>(x: T) -> impl Future<Output = T::Return> {
     GenFuture(x)
 }
 
 /// A wrapper around generators used to implement `Future` for `async`/`await` code.
+#[doc(hidden)]
 #[unstable(feature = "gen_future", issue = "50547")]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct GenFuture<T: Generator<Yield = ()>>(T);
@@ -29,6 +32,7 @@ struct GenFuture<T: Generator<Yield = ()>>(T);
 // self-referential borrows in the underlying generator.
 impl<T: Generator<Yield = ()>> !Unpin for GenFuture<T> {}
 
+#[doc(hidden)]
 #[unstable(feature = "gen_future", issue = "50547")]
 impl<T: Generator<Yield = ()>> Future for GenFuture<T> {
     type Output = T::Return;
@@ -56,6 +60,7 @@ impl Drop for SetOnDrop {
     }
 }
 
+#[doc(hidden)]
 #[unstable(feature = "gen_future", issue = "50547")]
 /// Sets the thread-local task context used by async/await futures.
 pub fn set_task_context<F, R>(cx: &mut Context<'_>, f: F) -> R
@@ -73,6 +78,7 @@ where
     f()
 }
 
+#[doc(hidden)]
 #[unstable(feature = "gen_future", issue = "50547")]
 /// Retrieves the thread-local task context used by async/await futures.
 ///
@@ -104,6 +110,7 @@ where
     unsafe { f(cx_ptr.as_mut()) }
 }
 
+#[doc(hidden)]
 #[unstable(feature = "gen_future", issue = "50547")]
 /// Polls a future in the current thread-local task waker.
 pub fn poll_with_tls_context<F>(f: Pin<&mut F>) -> Poll<F::Output>

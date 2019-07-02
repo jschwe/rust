@@ -5,7 +5,7 @@ use crate::hir::{FunctionRetTy, TyKind};
 use crate::ty;
 use errors::{Applicability, DiagnosticBuilder};
 
-impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
+impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
     /// When given a `ConcreteFailure` for a function with arguments containing a named region and
     /// an anonymous region, emit an descriptive diagnostic error.
     pub(super) fn try_report_named_anon_conflict(&self) -> Option<DiagnosticBuilder<'a>> {
@@ -95,13 +95,12 @@ impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
             }
         }
 
-        let (error_var, span_label_var) = if let Some(simple_ident) = arg.pat.simple_ident() {
-            (
+        let (error_var, span_label_var) = match arg.pat.simple_ident() {
+            Some(simple_ident) => (
                 format!("the type of `{}`", simple_ident),
                 format!("the type of `{}`", simple_ident),
-            )
-        } else {
-            ("parameter type".to_owned(), "type".to_owned())
+            ),
+            None => ("parameter type".to_owned(), "type".to_owned()),
         };
 
         let mut diag = struct_span_err!(

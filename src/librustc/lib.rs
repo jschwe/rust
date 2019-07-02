@@ -30,13 +30,14 @@
 
 #![deny(rust_2018_idioms)]
 #![deny(internal)]
-#![allow(explicit_outlives_requirements)]
+#![deny(unused_lifetimes)]
 
 #![feature(arbitrary_self_types)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(core_intrinsics)]
 #![feature(drain_filter)]
+#![feature(inner_deref)]
 #![cfg_attr(windows, feature(libc))]
 #![feature(never_type)]
 #![feature(exhaustive_patterns)]

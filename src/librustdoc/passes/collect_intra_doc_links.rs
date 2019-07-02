@@ -1,5 +1,5 @@
 use errors::Applicability;
-use rustc::hir::def::{Def, Namespace::{self, *}, PerNS};
+use rustc::hir::def::{Res, DefKind, Namespace::{self, *}, PerNS};
 use rustc::hir::def_id::DefId;
 use rustc::hir;
 use rustc::lint as lint;
@@ -38,7 +38,7 @@ pub fn collect_intra_doc_links(krate: Crate, cx: &DocContext<'_>) -> Crate {
 
 struct LinkCollector<'a, 'tcx> {
     cx: &'a DocContext<'tcx>,
-    mod_ids: Vec<ast::NodeId>,
+    mod_ids: Vec<hir::HirId>,
 }
 
 impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
@@ -55,8 +55,8 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                path_str: &str,
                ns: Namespace,
                current_item: &Option<String>,
-               parent_id: Option<ast::NodeId>)
-        -> Result<(Def, Option<String>), ()>
+               parent_id: Option<hir::HirId>)
+        -> Result<(Res, Option<String>), ()>
     {
         let cx = self.cx;
 
@@ -64,21 +64,23 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         // path.
         if let Some(id) = parent_id.or(self.mod_ids.last().cloned()) {
             // FIXME: `with_scope` requires the `NodeId` of a module.
+            let node_id = cx.tcx.hir().hir_to_node_id(id);
             let result = cx.enter_resolver(|resolver| {
-                resolver.with_scope(id, |resolver| {
+                resolver.with_scope(node_id, |resolver| {
                     resolver.resolve_str_path_error(DUMMY_SP, &path_str, ns == ValueNS)
                 })
             });
 
-            if let Ok(result) = result {
+            if let Ok((_, res)) = result {
+                let res = res.map_id(|_| panic!("unexpected node_id"));
                 // In case this is a trait item, skip the
                 // early return and try looking for the trait.
-                let value = match result.def {
-                    Def::Method(_) | Def::AssociatedConst(_) => true,
-                    Def::AssociatedTy(_) => false,
-                    Def::Variant(_) => return handle_variant(cx, result.def),
+                let value = match res {
+                    Res::Def(DefKind::Method, _) | Res::Def(DefKind::AssocConst, _) => true,
+                    Res::Def(DefKind::AssocTy, _) => false,
+                    Res::Def(DefKind::Variant, _) => return handle_variant(cx, res),
                     // Not a trait item; just return what we found.
-                    _ => return Ok((result.def, None))
+                    _ => return Ok((res, None))
                 };
 
                 if value != (ns == ValueNS) {
@@ -98,7 +100,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             // Try looking for methods and associated items.
             let mut split = path_str.rsplitn(2, "::");
             let item_name = if let Some(first) = split.next() {
-                first
+                Symbol::intern(first)
             } else {
                 return Err(())
             };
@@ -119,7 +121,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                 return cx.tcx.associated_items(did)
                     .find(|item| item.ident.name == item_name)
                     .and_then(|item| match item.kind {
-                        ty::AssociatedKind::Method => Some("method"),
+                        ty::AssocKind::Method => Some("method"),
                         _ => None,
                     })
                     .map(|out| (prim, Some(format!("{}#{}.{}", path, out, item_name))))
@@ -127,22 +129,27 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             }
 
             // FIXME: `with_scope` requires the `NodeId` of a module.
-            let ty = cx.enter_resolver(|resolver| resolver.with_scope(id, |resolver| {
+            let node_id = cx.tcx.hir().hir_to_node_id(id);
+            let (_, ty_res) = cx.enter_resolver(|resolver| resolver.with_scope(node_id, |resolver| {
                     resolver.resolve_str_path_error(DUMMY_SP, &path, false)
             }))?;
-            match ty.def {
-                Def::Struct(did) | Def::Union(did) | Def::Enum(did) | Def::TyAlias(did) => {
+            let ty_res = ty_res.map_id(|_| panic!("unexpected node_id"));
+            match ty_res {
+                Res::Def(DefKind::Struct, did)
+                | Res::Def(DefKind::Union, did)
+                | Res::Def(DefKind::Enum, did)
+                | Res::Def(DefKind::TyAlias, did) => {
                     let item = cx.tcx.inherent_impls(did)
                                      .iter()
                                      .flat_map(|imp| cx.tcx.associated_items(*imp))
                                      .find(|item| item.ident.name == item_name);
                     if let Some(item) = item {
                         let out = match item.kind {
-                            ty::AssociatedKind::Method if ns == ValueNS => "method",
-                            ty::AssociatedKind::Const if ns == ValueNS => "associatedconstant",
+                            ty::AssocKind::Method if ns == ValueNS => "method",
+                            ty::AssocKind::Const if ns == ValueNS => "associatedconstant",
                             _ => return Err(())
                         };
-                        Ok((ty.def, Some(format!("{}.{}", out, item_name))))
+                        Ok((ty_res, Some(format!("{}.{}", out, item_name))))
                     } else {
                         match cx.tcx.type_of(did).sty {
                             ty::Adt(def, _) => {
@@ -154,7 +161,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                                        .iter()
                                        .find(|item| item.ident.name == item_name)
                                 } {
-                                    Ok((ty.def,
+                                    Ok((ty_res,
                                         Some(format!("{}.{}",
                                                      if def.is_enum() {
                                                          "variant"
@@ -170,15 +177,15 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                         }
                     }
                 }
-                Def::Trait(did) => {
+                Res::Def(DefKind::Trait, did) => {
                     let item = cx.tcx.associated_item_def_ids(did).iter()
                                  .map(|item| cx.tcx.associated_item(*item))
                                  .find(|item| item.ident.name == item_name);
                     if let Some(item) = item {
                         let kind = match item.kind {
-                            ty::AssociatedKind::Const if ns == ValueNS => "associatedconstant",
-                            ty::AssociatedKind::Type if ns == TypeNS => "associatedtype",
-                            ty::AssociatedKind::Method if ns == ValueNS => {
+                            ty::AssocKind::Const if ns == ValueNS => "associatedconstant",
+                            ty::AssocKind::Type if ns == TypeNS => "associatedtype",
+                            ty::AssocKind::Method if ns == ValueNS => {
                                 if item.defaultness.has_value() {
                                     "method"
                                 } else {
@@ -188,7 +195,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                             _ => return Err(())
                         };
 
-                        Ok((ty.def, Some(format!("{}.{}", kind, item_name))))
+                        Ok((ty_res, Some(format!("{}.{}", kind, item_name))))
                     } else {
                         Err(())
                     }
@@ -216,11 +223,11 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
         };
 
         // FIXME: get the resolver to work with non-local resolve scopes.
-        let parent_node = self.cx.as_local_node_id(item.def_id).and_then(|node_id| {
+        let parent_node = self.cx.as_local_hir_id(item.def_id).and_then(|hir_id| {
             // FIXME: this fails hard for impls in non-module scope, but is necessary for the
             // current `resolve()` implementation.
-            match self.cx.tcx.hir().get_module_parent_node(node_id) {
-                id if id != node_id => Some(id),
+            match self.cx.tcx.hir().get_module_parent_node(hir_id) {
+                id if id != hir_id => Some(id),
                 _ => None,
             }
         });
@@ -239,7 +246,7 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
                     }
                 } else {
                     match parent_node.or(self.mod_ids.last().cloned()) {
-                        Some(parent) if parent != ast::CRATE_NODE_ID => {
+                        Some(parent) if parent != hir::CRATE_HIR_ID => {
                             // FIXME: can we pull the parent module's name from elsewhere?
                             Some(self.cx.tcx.hir().name(parent).to_string())
                         }
@@ -258,7 +265,7 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
         };
 
         if item.is_mod() && item.attrs.inner_docs {
-            self.mod_ids.push(self.cx.tcx.hir().hir_to_node_id(item_hir_id.unwrap()));
+            self.mod_ids.push(item_hir_id.unwrap());
         }
 
         let cx = self.cx;
@@ -278,7 +285,7 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
             }
 
             let link = ori_link.replace("`", "");
-            let (def, fragment) = {
+            let (res, fragment) = {
                 let mut kind = None;
                 let path_str = if let Some(prefix) =
                     ["struct@", "enum@", "type@",
@@ -313,10 +320,10 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
 
                 match kind {
                     Some(ns @ ValueNS) => {
-                        if let Ok(def) = self.resolve(path_str, ns, &current_item, parent_node) {
-                            def
+                        if let Ok(res) = self.resolve(path_str, ns, &current_item, parent_node) {
+                            res
                         } else {
-                            resolution_failure(cx, &item.attrs, path_str, &dox, link_range);
+                            resolution_failure(cx, &item, path_str, &dox, link_range);
                             // This could just be a normal link or a broken link
                             // we could potentially check if something is
                             // "intra-doc-link-like" and warn in that case.
@@ -324,10 +331,10 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
                         }
                     }
                     Some(ns @ TypeNS) => {
-                        if let Ok(def) = self.resolve(path_str, ns, &current_item, parent_node) {
-                            def
+                        if let Ok(res) = self.resolve(path_str, ns, &current_item, parent_node) {
+                            res
                         } else {
-                            resolution_failure(cx, &item.attrs, path_str, &dox, link_range);
+                            resolution_failure(cx, &item, path_str, &dox, link_range);
                             // This could just be a normal link.
                             continue;
                         }
@@ -335,24 +342,24 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
                     None => {
                         // Try everything!
                         let candidates = PerNS {
-                            macro_ns: macro_resolve(cx, path_str).map(|def| (def, None)),
+                            macro_ns: macro_resolve(cx, path_str).map(|res| (res, None)),
                             type_ns: self
                                 .resolve(path_str, TypeNS, &current_item, parent_node)
                                 .ok(),
                             value_ns: self
                                 .resolve(path_str, ValueNS, &current_item, parent_node)
                                 .ok()
-                                .and_then(|(def, fragment)| {
+                                .and_then(|(res, fragment)| {
                                     // Constructors are picked up in the type namespace.
-                                    match def {
-                                        Def::Ctor(..) | Def::SelfCtor(..) => None,
-                                        _ => Some((def, fragment))
+                                    match res {
+                                        Res::Def(DefKind::Ctor(..), _) | Res::SelfCtor(..) => None,
+                                        _ => Some((res, fragment))
                                     }
                                 }),
                         };
 
                         if candidates.is_empty() {
-                            resolution_failure(cx, &item.attrs, path_str, &dox, link_range);
+                            resolution_failure(cx, &item, path_str, &dox, link_range);
                             // this could just be a normal link
                             continue;
                         }
@@ -363,36 +370,36 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
                         } else {
                             ambiguity_error(
                                 cx,
-                                &item.attrs,
+                                &item,
                                 path_str,
                                 &dox,
                                 link_range,
-                                candidates.map(|candidate| candidate.map(|(def, _)| def)),
+                                candidates.map(|candidate| candidate.map(|(res, _)| res)),
                             );
                             continue;
                         }
                     }
                     Some(MacroNS) => {
-                        if let Some(def) = macro_resolve(cx, path_str) {
-                            (def, None)
+                        if let Some(res) = macro_resolve(cx, path_str) {
+                            (res, None)
                         } else {
-                            resolution_failure(cx, &item.attrs, path_str, &dox, link_range);
+                            resolution_failure(cx, &item, path_str, &dox, link_range);
                             continue
                         }
                     }
                 }
             };
 
-            if let Def::PrimTy(_) = def {
+            if let Res::PrimTy(_) = res {
                 item.attrs.links.push((ori_link, None, fragment));
             } else {
-                let id = register_def(cx, def);
+                let id = register_res(cx, res);
                 item.attrs.links.push((ori_link, Some(id), fragment));
             }
         }
 
         if item.is_mod() && !item.attrs.inner_docs {
-            self.mod_ids.push(self.cx.tcx.hir().hir_to_node_id(item_hir_id.unwrap()));
+            self.mod_ids.push(item_hir_id.unwrap());
         }
 
         if item.is_mod() {
@@ -417,24 +424,24 @@ impl<'a, 'tcx> DocFolder for LinkCollector<'a, 'tcx> {
 }
 
 /// Resolves a string as a macro.
-fn macro_resolve(cx: &DocContext<'_>, path_str: &str) -> Option<Def> {
-    use syntax::ext::base::{MacroKind, SyntaxExtension};
+fn macro_resolve(cx: &DocContext<'_>, path_str: &str) -> Option<Res> {
+    use syntax::ext::base::{MacroKind, SyntaxExtensionKind};
     let segment = ast::PathSegment::from_ident(Ident::from_str(path_str));
     let path = ast::Path { segments: vec![segment], span: DUMMY_SP };
     cx.enter_resolver(|resolver| {
         let parent_scope = resolver.dummy_parent_scope();
-        if let Ok(def) = resolver.resolve_macro_to_def_inner(&path, MacroKind::Bang,
+        if let Ok(res) = resolver.resolve_macro_to_res_inner(&path, MacroKind::Bang,
                                                             &parent_scope, false, false) {
-            if let Def::Macro(_, MacroKind::ProcMacroStub) = def {
+            if let Res::Def(DefKind::Macro(MacroKind::ProcMacroStub), _) = res {
                 // skip proc-macro stubs, they'll cause `get_macro` to crash
             } else {
-                if let SyntaxExtension::DeclMacro { .. } = *resolver.get_macro(def) {
-                    return Some(def.map_id(|_| panic!("unexpected id")));
+                if let SyntaxExtensionKind::LegacyBang(..) = resolver.get_macro(res).kind {
+                    return Some(res.map_id(|_| panic!("unexpected id")));
                 }
             }
         }
-        if let Some(def) = resolver.all_macros.get(&Symbol::intern(path_str)) {
-            return Some(def.map_id(|_| panic!("unexpected id")));
+        if let Some(res) = resolver.all_macros.get(&Symbol::intern(path_str)) {
+            return Some(res.map_id(|_| panic!("unexpected id")));
         }
         None
     })
@@ -447,16 +454,24 @@ fn macro_resolve(cx: &DocContext<'_>, path_str: &str) -> Option<Def> {
 /// line containing the failure as a note as well.
 fn resolution_failure(
     cx: &DocContext<'_>,
-    attrs: &Attributes,
+    item: &Item,
     path_str: &str,
     dox: &str,
     link_range: Option<Range<usize>>,
 ) {
+    let hir_id = match cx.as_local_hir_id(item.def_id) {
+        Some(hir_id) => hir_id,
+        None => {
+            // If non-local, no need to check anything.
+            return;
+        }
+    };
+    let attrs = &item.attrs;
     let sp = span_of_attrs(attrs);
 
     let mut diag = cx.tcx.struct_span_lint_hir(
         lint::builtin::INTRA_DOC_LINK_RESOLUTION_FAILURE,
-        hir::CRATE_HIR_ID,
+        hir_id,
         sp,
         &format!("`[{}]` cannot be resolved, ignoring it...", path_str),
     );
@@ -490,36 +505,44 @@ fn resolution_failure(
 
 fn ambiguity_error(
     cx: &DocContext<'_>,
-    attrs: &Attributes,
+    item: &Item,
     path_str: &str,
     dox: &str,
     link_range: Option<Range<usize>>,
-    candidates: PerNS<Option<Def>>,
+    candidates: PerNS<Option<Res>>,
 ) {
+    let hir_id = match cx.as_local_hir_id(item.def_id) {
+        Some(hir_id) => hir_id,
+        None => {
+            // If non-local, no need to check anything.
+            return;
+        }
+    };
+    let attrs = &item.attrs;
     let sp = span_of_attrs(attrs);
 
     let mut msg = format!("`{}` is ", path_str);
 
     let candidates = [TypeNS, ValueNS, MacroNS].iter().filter_map(|&ns| {
-        candidates[ns].map(|def| (def, ns))
+        candidates[ns].map(|res| (res, ns))
     }).collect::<Vec<_>>();
     match candidates.as_slice() {
         [(first_def, _), (second_def, _)] => {
             msg += &format!(
                 "both {} {} and {} {}",
                 first_def.article(),
-                first_def.kind_name(),
+                first_def.descr(),
                 second_def.article(),
-                second_def.kind_name(),
+                second_def.descr(),
             );
         }
         _ => {
             let mut candidates = candidates.iter().peekable();
-            while let Some((def, _)) = candidates.next() {
+            while let Some((res, _)) = candidates.next() {
                 if candidates.peek().is_some() {
-                    msg += &format!("{} {}, ", def.article(), def.kind_name());
+                    msg += &format!("{} {}, ", res.article(), res.descr());
                 } else {
-                    msg += &format!("and {} {}", def.article(), def.kind_name());
+                    msg += &format!("and {} {}", res.article(), res.descr());
                 }
             }
         }
@@ -527,7 +550,7 @@ fn ambiguity_error(
 
     let mut diag = cx.tcx.struct_span_lint_hir(
         lint::builtin::INTRA_DOC_LINK_RESOLUTION_FAILURE,
-        hir::CRATE_HIR_ID,
+        hir_id,
         sp,
         &msg,
     );
@@ -537,23 +560,23 @@ fn ambiguity_error(
             diag.set_span(sp);
             diag.span_label(sp, "ambiguous link");
 
-            for (def, ns) in candidates {
-                let (action, mut suggestion) = match def {
-                    Def::Method(..) | Def::Fn(..) => {
+            for (res, ns) in candidates {
+                let (action, mut suggestion) = match res {
+                    Res::Def(DefKind::Method, _) | Res::Def(DefKind::Fn, _) => {
                         ("add parentheses", format!("{}()", path_str))
                     }
-                    Def::Macro(..) => {
+                    Res::Def(DefKind::Macro(..), _) => {
                         ("add an exclamation mark", format!("{}!", path_str))
                     }
                     _ => {
-                        let type_ = match (def, ns) {
-                            (Def::Const(..), _) => "const",
-                            (Def::Static(..), _) => "static",
-                            (Def::Struct(..), _) => "struct",
-                            (Def::Enum(..), _) => "enum",
-                            (Def::Union(..), _) => "union",
-                            (Def::Trait(..), _) => "trait",
-                            (Def::Mod(..), _) => "module",
+                        let type_ = match (res, ns) {
+                            (Res::Def(DefKind::Const, _), _) => "const",
+                            (Res::Def(DefKind::Static, _), _) => "static",
+                            (Res::Def(DefKind::Struct, _), _) => "struct",
+                            (Res::Def(DefKind::Enum, _), _) => "enum",
+                            (Res::Def(DefKind::Union, _), _) => "union",
+                            (Res::Def(DefKind::Trait, _), _) => "trait",
+                            (Res::Def(DefKind::Mod, _), _) => "module",
                             (_, TypeNS) => "type",
                             (_, ValueNS) => "value",
                             (_, MacroNS) => "macro",
@@ -570,7 +593,7 @@ fn ambiguity_error(
 
                 diag.span_suggestion(
                     sp,
-                    &format!("to link to the {}, {}", def.kind_name(), action),
+                    &format!("to link to the {}, {}", res.descr(), action),
                     suggestion,
                     Applicability::MaybeIncorrect,
                 );
@@ -598,41 +621,41 @@ fn ambiguity_error(
     diag.emit();
 }
 
-/// Given an enum variant's def, return the def of its enum and the associated fragment.
-fn handle_variant(cx: &DocContext<'_>, def: Def) -> Result<(Def, Option<String>), ()> {
+/// Given an enum variant's res, return the res of its enum and the associated fragment.
+fn handle_variant(cx: &DocContext<'_>, res: Res) -> Result<(Res, Option<String>), ()> {
     use rustc::ty::DefIdTree;
 
-    let parent = if let Some(parent) = cx.tcx.parent(def.def_id()) {
+    let parent = if let Some(parent) = cx.tcx.parent(res.def_id()) {
         parent
     } else {
         return Err(())
     };
-    let parent_def = Def::Enum(parent);
-    let variant = cx.tcx.expect_variant_def(def);
+    let parent_def = Res::Def(DefKind::Enum, parent);
+    let variant = cx.tcx.expect_variant_res(res);
     Ok((parent_def, Some(format!("{}.v", variant.ident.name))))
 }
 
-const PRIMITIVES: &[(&str, Def)] = &[
-    ("u8",    Def::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U8))),
-    ("u16",   Def::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U16))),
-    ("u32",   Def::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U32))),
-    ("u64",   Def::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U64))),
-    ("u128",  Def::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U128))),
-    ("usize", Def::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::Usize))),
-    ("i8",    Def::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I8))),
-    ("i16",   Def::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I16))),
-    ("i32",   Def::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I32))),
-    ("i64",   Def::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I64))),
-    ("i128",  Def::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I128))),
-    ("isize", Def::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::Isize))),
-    ("f32",   Def::PrimTy(hir::PrimTy::Float(syntax::ast::FloatTy::F32))),
-    ("f64",   Def::PrimTy(hir::PrimTy::Float(syntax::ast::FloatTy::F64))),
-    ("str",   Def::PrimTy(hir::PrimTy::Str)),
-    ("bool",  Def::PrimTy(hir::PrimTy::Bool)),
-    ("char",  Def::PrimTy(hir::PrimTy::Char)),
+const PRIMITIVES: &[(&str, Res)] = &[
+    ("u8",    Res::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U8))),
+    ("u16",   Res::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U16))),
+    ("u32",   Res::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U32))),
+    ("u64",   Res::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U64))),
+    ("u128",  Res::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::U128))),
+    ("usize", Res::PrimTy(hir::PrimTy::Uint(syntax::ast::UintTy::Usize))),
+    ("i8",    Res::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I8))),
+    ("i16",   Res::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I16))),
+    ("i32",   Res::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I32))),
+    ("i64",   Res::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I64))),
+    ("i128",  Res::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::I128))),
+    ("isize", Res::PrimTy(hir::PrimTy::Int(syntax::ast::IntTy::Isize))),
+    ("f32",   Res::PrimTy(hir::PrimTy::Float(syntax::ast::FloatTy::F32))),
+    ("f64",   Res::PrimTy(hir::PrimTy::Float(syntax::ast::FloatTy::F64))),
+    ("str",   Res::PrimTy(hir::PrimTy::Str)),
+    ("bool",  Res::PrimTy(hir::PrimTy::Bool)),
+    ("char",  Res::PrimTy(hir::PrimTy::Char)),
 ];
 
-fn is_primitive(path_str: &str, ns: Namespace) -> Option<Def> {
+fn is_primitive(path_str: &str, ns: Namespace) -> Option<Res> {
     if ns == TypeNS {
         PRIMITIVES.iter().find(|x| x.0 == path_str).map(|x| x.1)
     } else {

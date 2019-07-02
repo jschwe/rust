@@ -17,7 +17,7 @@ pub struct TypeVariableTable<'tcx> {
     /// the known value.
     eq_relations: ut::UnificationTable<ut::InPlace<TyVidEqKey<'tcx>>>,
 
-    /// Two variables are unified in `eq_relations` when we have a
+    /// Two variables are unified in `sub_relations` when we have a
     /// constraint `?X <: ?Y` *or* a constraint `?Y <: ?X`. This second
     /// table exists only to help with the occurs check. In particular,
     /// we want to report constraints like these as an occurs check
@@ -37,25 +37,28 @@ pub struct TypeVariableTable<'tcx> {
     sub_relations: ut::UnificationTable<ut::InPlace<ty::TyVid>>,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct TypeVariableOrigin {
+    pub kind: TypeVariableOriginKind,
+    pub span: Span,
+}
+
 /// Reasons to create a type inference variable
 #[derive(Copy, Clone, Debug)]
-pub enum TypeVariableOrigin {
-    MiscVariable(Span),
-    NormalizeProjectionType(Span),
-    TypeInference(Span),
-    TypeParameterDefinition(Span, InternedString),
+pub enum TypeVariableOriginKind {
+    MiscVariable,
+    NormalizeProjectionType,
+    TypeInference,
+    TypeParameterDefinition(InternedString),
 
-    /// one of the upvars or closure kind parameters in a `ClosureSubsts`
-    /// (before it has been determined)
-    ClosureSynthetic(Span),
-    SubstitutionPlaceholder(Span),
-    AutoDeref(Span),
-    AdjustmentType(Span),
-    DivergingStmt(Span),
-    DivergingBlockExpr(Span),
-    DivergingFn(Span),
-    LatticeVariable(Span),
-    Generalized(ty::TyVid),
+    /// One of the upvars or closure kind parameters in a `ClosureSubsts`
+    /// (before it has been determined).
+    ClosureSynthetic,
+    SubstitutionPlaceholder,
+    AutoDeref,
+    AdjustmentType,
+    DivergingFn,
+    LatticeVariable,
 }
 
 struct TypeVariableData {
@@ -365,7 +368,7 @@ impl sv::SnapshotVecDelegate for Delegate {
 
     fn reverse(_values: &mut Vec<TypeVariableData>, _action: Instantiate) {
         // We don't actually have to *do* anything to reverse an
-        // instanation; the value for a variable is stored in the
+        // instantiation; the value for a variable is stored in the
         // `eq_relations` and hence its rollback code will handle
         // it. In fact, we could *almost* just remove the
         // `SnapshotVec` entirely, except that we would have to

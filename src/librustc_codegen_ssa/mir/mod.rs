@@ -1,15 +1,15 @@
-use rustc::ty::{self, Ty, TypeFoldable, UpvarSubsts};
-use rustc::ty::layout::{TyLayout, HasTyCtxt};
-use rustc::mir::{self, Mir};
+use rustc::ty::{self, Ty, TypeFoldable, UpvarSubsts, Instance};
+use rustc::ty::layout::{TyLayout, HasTyCtxt, FnTypeExt};
+use rustc::mir::{self, Body};
 use rustc::session::config::DebugInfo;
-use rustc_mir::monomorphize::Instance;
 use rustc_target::abi::call::{FnType, PassMode, IgnoreMode};
+use rustc_target::abi::{Variants, VariantIdx};
 use crate::base;
 use crate::debuginfo::{self, VariableAccess, VariableKind, FunctionDebugContext};
 use crate::traits::*;
 
 use syntax_pos::{DUMMY_SP, NO_EXPANSION, BytePos, Span};
-use syntax::symbol::keywords;
+use syntax::symbol::kw;
 
 use std::iter;
 
@@ -23,10 +23,10 @@ use rustc::mir::traversal;
 use self::operand::{OperandRef, OperandValue};
 
 /// Master context for codegenning from MIR.
-pub struct FunctionCx<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> {
+pub struct FunctionCx<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> {
     instance: Instance<'tcx>,
 
-    mir: &'a mir::Mir<'tcx>,
+    mir: &'a mir::Body<'tcx>,
 
     debug_context: FunctionDebugContext<Bx::DIScope>,
 
@@ -43,7 +43,7 @@ pub struct FunctionCx<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> {
     /// don't really care about it very much. Anyway, this value
     /// contains an alloca into which the personality is stored and
     /// then later loaded when generating the DIVERGE_BLOCK.
-    personality_slot: Option<PlaceRef<'tcx, Bx::Value,>>,
+    personality_slot: Option<PlaceRef<'tcx, Bx::Value>>,
 
     /// A `Block` for each MIR `BasicBlock`
     blocks: IndexVec<mir::BasicBlock, Bx::BasicBlock>,
@@ -83,11 +83,11 @@ pub struct FunctionCx<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> {
     scopes: IndexVec<mir::SourceScope, debuginfo::MirDebugScope<Bx::DIScope>>,
 
     /// If this function is a C-variadic function, this contains the `PlaceRef` of the
-    /// "spoofed" `VaList`.
+    /// "spoofed" `VaListImpl`.
     va_list_ref: Option<PlaceRef<'tcx, Bx::Value>>,
 }
 
-impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
+impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     pub fn monomorphize<T>(&self, value: &T) -> T
         where T: TypeFoldable<'tcx>
     {
@@ -128,14 +128,7 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             // Walk up the macro expansion chain until we reach a non-expanded span.
             // We also stop at the function body level because no line stepping can occur
             // at the level above that.
-            let mut span = source_info.span;
-            while span.ctxt() != NO_EXPANSION && span.ctxt() != self.mir.span.ctxt() {
-                if let Some(info) = span.ctxt().outer().expn_info() {
-                    span = info.call_site;
-                } else {
-                    break;
-                }
-            }
+            let span = syntax_pos::hygiene::walk_chain(source_info.span, self.mir.span.ctxt());
             let scope = self.scope_metadata_for_loc(source_info.scope, span.lo());
             // Use span of the outermost expansion site, while keeping the original lexical scope.
             (scope, span)
@@ -174,7 +167,7 @@ enum LocalRef<'tcx, V> {
     Operand(Option<OperandRef<'tcx, V>>),
 }
 
-impl<'a, 'tcx: 'a, V: CodegenObject> LocalRef<'tcx, V> {
+impl<'a, 'tcx, V: CodegenObject> LocalRef<'tcx, V> {
     fn new_operand<Bx: BuilderMethods<'a, 'tcx, Value = V>>(
         bx: &mut Bx,
         layout: TyLayout<'tcx>,
@@ -192,16 +185,16 @@ impl<'a, 'tcx: 'a, V: CodegenObject> LocalRef<'tcx, V> {
 
 ///////////////////////////////////////////////////////////////////////////
 
-pub fn codegen_mir<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
+pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     cx: &'a Bx::CodegenCx,
     llfn: Bx::Value,
-    mir: &'a Mir<'tcx>,
+    mir: &'a Body<'tcx>,
     instance: Instance<'tcx>,
     sig: ty::FnSig<'tcx>,
 ) {
     assert!(!instance.substs.needs_infer());
 
-    let fn_ty = cx.new_fn_type(sig, &[]);
+    let fn_ty = FnType::new(cx, sig, &[]);
     debug!("fn_ty: {:?}", fn_ty);
     let mut debug_context =
         cx.create_function_debug_context(instance, sig, llfn, mir);
@@ -358,14 +351,15 @@ pub fn codegen_mir<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
     }
 }
 
-fn create_funclets<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
-    mir: &'a Mir<'tcx>,
+fn create_funclets<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
+    mir: &'a Body<'tcx>,
     bx: &mut Bx,
     cleanup_kinds: &IndexVec<mir::BasicBlock, CleanupKind>,
-    block_bxs: &IndexVec<mir::BasicBlock, Bx::BasicBlock>)
-    -> (IndexVec<mir::BasicBlock, Option<Bx::BasicBlock>>,
-        IndexVec<mir::BasicBlock, Option<Bx::Funclet>>)
-{
+    block_bxs: &IndexVec<mir::BasicBlock, Bx::BasicBlock>,
+) -> (
+    IndexVec<mir::BasicBlock, Option<Bx::BasicBlock>>,
+    IndexVec<mir::BasicBlock, Option<Bx::Funclet>>,
+) {
     block_bxs.iter_enumerated().zip(cleanup_kinds).map(|((bb, &llbb), cleanup_kind)| {
         match *cleanup_kind {
             CleanupKind::Funclet if base::wants_msvc_seh(bx.sess()) => {}
@@ -427,7 +421,7 @@ fn create_funclets<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
 /// Produces, for each argument, a `Value` pointing at the
 /// argument's value. As arguments are places, these are always
 /// indirect.
-fn arg_local_refs<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
+fn arg_local_refs<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     bx: &mut Bx,
     fx: &FunctionCx<'a, 'tcx, Bx>,
     memory_locals: &BitSet<mir::Local>,
@@ -495,7 +489,7 @@ fn arg_local_refs<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
                 };
                 bx.declare_local(
                     &fx.debug_context,
-                    arg_decl.name.unwrap_or(keywords::Invalid.name()),
+                    arg_decl.name.unwrap_or(kw::Invalid),
                     arg_ty, scope,
                     variable_access,
                     VariableKind::ArgumentVariable(arg_index + 1),
@@ -568,39 +562,29 @@ fn arg_local_refs<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
             indirect_operand.store(bx, tmp);
             tmp
         } else {
+            let tmp = PlaceRef::alloca(bx, arg.layout, &name);
             if fx.fn_ty.c_variadic && last_arg_idx.map(|idx| arg_index == idx).unwrap_or(false) {
-                let va_list_impl = match arg_decl.ty.ty_adt_def() {
-                    Some(adt) => adt.non_enum_variant(),
-                    None => bug!("`va_list` language item improperly constructed")
+                let va_list_did = match tcx.lang_items().va_list() {
+                    Some(did) => did,
+                    None => bug!("`va_list` lang item required for C-variadic functions"),
                 };
-                match tcx.type_of(va_list_impl.fields[0].did).sty {
-                    ty::Ref(_, ty, _) => {
-                        // If the underlying structure the `VaList` contains is a structure,
-                        // we need to allocate it (e.g., X86_64 on Linux).
-                        let tmp = PlaceRef::alloca(bx, arg.layout, &name);
-                        if let ty::Adt(..) = ty.sty {
-                            let layout = bx.layout_of(ty);
-                            // Create an unnamed allocation for the backing structure
-                            // and store it in the the spoofed `VaList`.
-                            let backing = PlaceRef::alloca(bx, layout, "");
-                            bx.store(backing.llval, tmp.llval, layout.align.abi);
-                        }
-                        // Call `va_start` on the spoofed `VaList`.
+                match arg_decl.ty.sty {
+                    ty::Adt(def, _) if def.did == va_list_did => {
+                        // Call `va_start` on the spoofed `VaListImpl`.
                         bx.va_start(tmp.llval);
                         *va_list_ref = Some(tmp);
-                        tmp
-                    }
-                    _ => bug!("improperly constructed `va_list` lang item"),
+                    },
+                    _ => bug!("last argument of variadic function is not a `va_list`")
                 }
             } else {
-                let tmp = PlaceRef::alloca(bx, arg.layout, &name);
                 bx.store_fn_arg(arg, &mut llarg_idx, tmp);
-                tmp
             }
+            tmp
         };
+        let upvar_debuginfo = &mir.__upvar_debuginfo_codegen_only_do_not_use;
         arg_scope.map(|scope| {
             // Is this a regular argument?
-            if arg_index > 0 || mir.upvar_decls.is_empty() {
+            if arg_index > 0 || upvar_debuginfo.is_empty() {
                 // The Rust ABI passes indirect variables using a pointer and a manual copy, so we
                 // need to insert a deref here, but the C ABI uses a pointer and a copy using the
                 // byval attribute, for which LLVM always does the deref itself,
@@ -611,7 +595,7 @@ fn arg_local_refs<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
 
                 bx.declare_local(
                     &fx.debug_context,
-                    arg_decl.name.unwrap_or(keywords::Invalid.name()),
+                    arg_decl.name.unwrap_or(kw::Invalid),
                     arg.layout.ty,
                     scope,
                     variable_access,
@@ -638,16 +622,18 @@ fn arg_local_refs<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
             let (def_id, upvar_substs) = match closure_layout.ty.sty {
                 ty::Closure(def_id, substs) => (def_id, UpvarSubsts::Closure(substs)),
                 ty::Generator(def_id, substs, _) => (def_id, UpvarSubsts::Generator(substs)),
-                _ => bug!("upvar_decls with non-closure arg0 type `{}`", closure_layout.ty)
+                _ => bug!("upvar debuginfo with non-closure arg0 type `{}`", closure_layout.ty)
             };
             let upvar_tys = upvar_substs.upvar_tys(def_id, tcx);
 
             let extra_locals = {
-                let upvars = mir.upvar_decls
+                let upvars = upvar_debuginfo
                     .iter()
                     .zip(upvar_tys)
                     .enumerate()
-                    .map(|(i, (decl, ty))| (i, decl.debug_name, decl.by_ref, ty));
+                    .map(|(i, (upvar, ty))| {
+                        (None, i, upvar.debug_name, upvar.by_ref, ty, scope, DUMMY_SP)
+                    });
 
                 let generator_fields = mir.generator_layout.as_ref().map(|generator_layout| {
                     let (def_id, gen_substs) = match closure_layout.ty.sty {
@@ -656,24 +642,50 @@ fn arg_local_refs<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
                     };
                     let state_tys = gen_substs.state_tys(def_id, tcx);
 
-                    let upvar_count = mir.upvar_decls.len();
-                    generator_layout.fields
-                        .iter()
+                    generator_layout.variant_fields.iter()
                         .zip(state_tys)
                         .enumerate()
-                        .filter_map(move |(i, (decl, ty))| {
-                            let ty = fx.monomorphize(&ty);
-                            decl.name.map(|name| (i + upvar_count + 1, name, false, ty))
+                        .flat_map(move |(variant_idx, (fields, tys))| {
+                            let variant_idx = Some(VariantIdx::from(variant_idx));
+                            fields.iter()
+                                .zip(tys)
+                                .enumerate()
+                                .filter_map(move |(i, (field, ty))| {
+                                    let decl = &generator_layout.
+                                        __local_debuginfo_codegen_only_do_not_use[*field];
+                                    if let Some(name) = decl.name {
+                                        let ty = fx.monomorphize(&ty);
+                                        let (var_scope, var_span) = fx.debug_loc(mir::SourceInfo {
+                                            span: decl.source_info.span,
+                                            scope: decl.visibility_scope,
+                                        });
+                                        let var_scope = var_scope.unwrap_or(scope);
+                                        Some((variant_idx, i, name, false, ty, var_scope, var_span))
+                                    } else {
+                                        None
+                                    }
+                            })
                         })
                 }).into_iter().flatten();
 
                 upvars.chain(generator_fields)
             };
 
-            for (field, name, by_ref, ty) in extra_locals {
-                let byte_offset_of_var_in_env = closure_layout.fields.offset(field).bytes();
+            for (variant_idx, field, name, by_ref, ty, var_scope, var_span) in extra_locals {
+                let fields = match variant_idx {
+                    Some(variant_idx) => {
+                        match &closure_layout.variants {
+                            Variants::Multiple { variants, .. } => {
+                                &variants[variant_idx].fields
+                            },
+                            _ => bug!("variant index on univariant layout"),
+                        }
+                    }
+                    None => &closure_layout.fields,
+                };
+                let byte_offset_of_var_in_env = fields.offset(field).bytes();
 
-                let ops = bx.debuginfo_upvar_decls_ops_sequence(byte_offset_of_var_in_env);
+                let ops = bx.debuginfo_upvar_ops_sequence(byte_offset_of_var_in_env);
 
                 // The environment and the capture can each be indirect.
                 let mut ops = if env_ref { &ops[..] } else { &ops[1..] };
@@ -693,10 +705,10 @@ fn arg_local_refs<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
                     &fx.debug_context,
                     name,
                     ty,
-                    scope,
+                    var_scope,
                     variable_access,
                     VariableKind::LocalVariable,
-                    DUMMY_SP
+                    var_span
                 );
             }
         });

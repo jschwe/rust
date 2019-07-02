@@ -1,16 +1,16 @@
-use rustc::ty::{self, Ty, adjustment::{PointerCast}};
+use rustc::ty::{self, Ty, adjustment::{PointerCast}, Instance};
 use rustc::ty::cast::{CastTy, IntTy};
 use rustc::ty::layout::{self, LayoutOf, HasTyCtxt};
 use rustc::mir;
 use rustc::middle::lang_items::ExchangeMallocFnLangItem;
 use rustc_apfloat::{ieee, Float, Status, Round};
 use std::{u128, i128};
+use syntax::symbol::sym;
 
 use crate::base;
 use crate::MemFlags;
 use crate::callee;
 use crate::common::{self, RealPredicate, IntPredicate};
-use rustc_mir::monomorphize;
 
 use crate::traits::*;
 
@@ -18,7 +18,7 @@ use super::{FunctionCx, LocalRef};
 use super::operand::{OperandRef, OperandValue};
 use super::place::PlaceRef;
 
-impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
+impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     pub fn codegen_rvalue(
         &mut self,
         mut bx: Bx,
@@ -181,9 +181,8 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                     mir::CastKind::Pointer(PointerCast::ReifyFnPointer) => {
                         match operand.layout.ty.sty {
                             ty::FnDef(def_id, substs) => {
-                                if bx.cx().tcx().has_attr(def_id, "rustc_args_required_const") {
-                                    bug!("reifying a fn ptr that requires \
-                                          const arguments");
+                                if bx.cx().tcx().has_attr(def_id, sym::rustc_args_required_const) {
+                                    bug!("reifying a fn ptr that requires const arguments");
                                 }
                                 OperandValue::Immediate(
                                     callee::resolve_and_get_fn(bx.cx(), def_id, substs))
@@ -196,7 +195,7 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                     mir::CastKind::Pointer(PointerCast::ClosureFnPointer(_)) => {
                         match operand.layout.ty.sty {
                             ty::Closure(def_id, substs) => {
-                                let instance = monomorphize::resolve_closure(
+                                let instance = Instance::resolve_closure(
                                     bx.cx().tcx(), def_id, substs, ty::ClosureKind::FnOnce);
                                 OperandValue::Immediate(bx.cx().get_fn(instance))
                             }
@@ -271,13 +270,12 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                         let ll_t_in = bx.cx().immediate_backend_type(operand.layout);
                         match operand.layout.variants {
                             layout::Variants::Single { index } => {
-                                if let Some(def) = operand.layout.ty.ty_adt_def() {
-                                    let discr_val = def
-                                        .discriminant_for_variant(bx.cx().tcx(), index)
-                                        .val;
-                                    let discr = bx.cx().const_uint_big(ll_t_out, discr_val);
+                                if let Some(discr) =
+                                    operand.layout.ty.discriminant_for_variant(bx.tcx(), index)
+                                {
+                                    let discr_val = bx.cx().const_uint_big(ll_t_out, discr.val);
                                     return (bx, OperandRef {
-                                        val: OperandValue::Immediate(discr),
+                                        val: OperandValue::Immediate(discr_val),
                                         layout: cast,
                                     });
                                 }
@@ -371,7 +369,7 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 (bx, OperandRef {
                     val,
                     layout: self.cx.layout_of(self.cx.tcx().mk_ref(
-                        self.cx.tcx().types.re_erased,
+                        self.cx.tcx().lifetimes.re_erased,
                         ty::TypeAndMut { ty, mutbl: bk.to_mutbl_lossy() }
                     )),
                 })
@@ -431,7 +429,7 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             mir::Rvalue::UnaryOp(op, ref operand) => {
                 let operand = self.codegen_operand(&mut bx, operand);
                 let lloperand = operand.immediate();
-                let is_float = operand.layout.ty.is_fp();
+                let is_float = operand.layout.ty.is_floating_point();
                 let llval = match op {
                     mir::UnOp::Not => bx.not(lloperand),
                     mir::UnOp::Neg => if is_float {
@@ -538,7 +536,7 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         rhs: Bx::Value,
         input_ty: Ty<'tcx>,
     ) -> Bx::Value {
-        let is_float = input_ty.is_fp();
+        let is_float = input_ty.is_floating_point();
         let is_signed = input_ty.is_signed();
         let is_unit = input_ty.is_unit();
         match op {
@@ -689,7 +687,7 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     }
 }
 
-impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
+impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     pub fn rvalue_creates_operand(&self, rvalue: &mir::Rvalue<'tcx>) -> bool {
         match *rvalue {
             mir::Rvalue::Ref(..) |
@@ -714,7 +712,7 @@ impl<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     }
 }
 
-fn cast_int_to_float<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
+fn cast_int_to_float<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     bx: &mut Bx,
     signed: bool,
     x: Bx::Value,
@@ -748,7 +746,7 @@ fn cast_int_to_float<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
     }
 }
 
-fn cast_float_to_int<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
+fn cast_float_to_int<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     bx: &mut Bx,
     signed: bool,
     x: Bx::Value,

@@ -28,7 +28,7 @@
 // It's cleaner to just turn off the unused_imports warning than to fix them.
 #![allow(unused_imports)]
 
-use core::borrow::Borrow;
+use core::borrow::{Borrow, BorrowMut};
 use core::str::pattern::{Pattern, Searcher, ReverseSearcher, DoubleEndedSearcher};
 use core::mem;
 use core::ptr;
@@ -85,10 +85,6 @@ impl<S: Borrow<str>> SliceConcatExt<str> for [S] {
         unsafe {
             String::from_utf8_unchecked( join_generic_copy(self, sep.as_bytes()) )
         }
-    }
-
-    fn connect(&self, sep: &str) -> String {
-        self.join(sep)
     }
 }
 
@@ -187,6 +183,14 @@ impl Borrow<str> for String {
     #[inline]
     fn borrow(&self) -> &str {
         &self[..]
+    }
+}
+
+#[stable(feature = "string_borrow_mut", since = "1.36.0")]
+impl BorrowMut<str> for String {
+    #[inline]
+    fn borrow_mut(&mut self) -> &mut str {
+        &mut self[..]
     }
 }
 
@@ -422,6 +426,13 @@ impl str {
     /// let new_year = "农历新年";
     ///
     /// assert_eq!(new_year, new_year.to_uppercase());
+    /// ```
+    ///
+    /// One character can become multiple:
+    /// ```
+    /// let s = "tschüß";
+    ///
+    /// assert_eq!("TSCHÜSS", s.to_uppercase());
     /// ```
     #[stable(feature = "unicode_case_mapping", since = "1.2.0")]
     pub fn to_uppercase(&self) -> String {

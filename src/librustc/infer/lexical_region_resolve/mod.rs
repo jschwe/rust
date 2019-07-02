@@ -30,13 +30,10 @@ mod graphviz;
 /// assuming such values can be found. It returns the final values of
 /// all the variables as well as a set of errors that must be reported.
 pub fn resolve<'tcx>(
-    region_rels: &RegionRelations<'_, '_, 'tcx>,
+    region_rels: &RegionRelations<'_, 'tcx>,
     var_infos: VarInfos,
     data: RegionConstraintData<'tcx>,
-) -> (
-    LexicalRegionResolutions<'tcx>,
-    Vec<RegionResolutionError<'tcx>>,
-) {
+) -> (LexicalRegionResolutions<'tcx>, Vec<RegionResolutionError<'tcx>>) {
     debug!("RegionConstraintData: resolve_regions()");
     let mut errors = vec![];
     let mut resolver = LexicalResolver {
@@ -96,14 +93,14 @@ struct RegionAndOrigin<'tcx> {
 
 type RegionGraph<'tcx> = Graph<(), Constraint<'tcx>>;
 
-struct LexicalResolver<'cx, 'gcx: 'tcx, 'tcx: 'cx> {
-    region_rels: &'cx RegionRelations<'cx, 'gcx, 'tcx>,
+struct LexicalResolver<'cx, 'tcx> {
+    region_rels: &'cx RegionRelations<'cx, 'tcx>,
     var_infos: VarInfos,
     data: RegionConstraintData<'tcx>,
 }
 
-impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
-    fn tcx(&self) -> TyCtxt<'cx, 'gcx, 'tcx> {
+impl<'cx, 'tcx> LexicalResolver<'cx, 'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
         self.region_rels.tcx
     }
 
@@ -136,14 +133,14 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
 
     /// Initially, the value for all variables is set to `'empty`, the
     /// empty region. The `expansion` phase will grow this larger.
-    fn construct_var_data(&self, tcx: TyCtxt<'_, '_, 'tcx>) -> LexicalRegionResolutions<'tcx> {
+    fn construct_var_data(&self, tcx: TyCtxt<'tcx>) -> LexicalRegionResolutions<'tcx> {
         LexicalRegionResolutions {
-            error_region: tcx.types.re_static,
-            values: IndexVec::from_elem_n(VarValue::Value(tcx.types.re_empty), self.num_vars())
+            error_region: tcx.lifetimes.re_static,
+            values: IndexVec::from_elem_n(VarValue::Value(tcx.lifetimes.re_empty), self.num_vars())
         }
     }
 
-    fn dump_constraints(&self, free_regions: &RegionRelations<'_, '_, 'tcx>) {
+    fn dump_constraints(&self, free_regions: &RegionRelations<'_, 'tcx>) {
         debug!(
             "----() Start constraint listing (context={:?}) ()----",
             free_regions.context
@@ -266,7 +263,7 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
                 let b_universe = self.var_infos[b_vid].universe;
                 if let ty::RePlaceholder(p) = lub {
                     if b_universe.cannot_name(p.universe) {
-                        lub = self.tcx().types.re_static;
+                        lub = self.tcx().lifetimes.re_static;
                     }
                 }
 
@@ -348,7 +345,7 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
 
                 // otherwise, we don't know what the free region is,
                 // so we must conservatively say the LUB is static:
-                tcx.types.re_static
+                tcx.lifetimes.re_static
             }
 
             (&ReScope(a_id), &ReScope(b_id)) => {
@@ -371,7 +368,7 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
             (&RePlaceholder(..), _) | (_, &RePlaceholder(..)) => if a == b {
                 a
             } else {
-                tcx.types.re_static
+                tcx.lifetimes.re_static
             },
         }
     }
@@ -598,7 +595,7 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
         for lower_bound in &lower_bounds {
             let effective_lower_bound = if let ty::RePlaceholder(p) = lower_bound.region {
                 if node_universe.cannot_name(p.universe) {
-                    self.tcx().types.re_static
+                    self.tcx().lifetimes.re_static
                 } else {
                     lower_bound.region
                 }
@@ -785,7 +782,7 @@ impl<'tcx> fmt::Debug for RegionAndOrigin<'tcx> {
 }
 
 impl<'tcx> LexicalRegionResolutions<'tcx> {
-    fn normalize<T>(&self, tcx: TyCtxt<'_, '_, 'tcx>, value: T) -> T
+    fn normalize<T>(&self, tcx: TyCtxt<'tcx>, value: T) -> T
     where
         T: TypeFoldable<'tcx>,
     {

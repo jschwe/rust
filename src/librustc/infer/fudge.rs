@@ -1,13 +1,28 @@
-use crate::ty::{self, Ty, TyCtxt, TyVid, IntVid, FloatVid, RegionVid};
+use crate::ty::{self, Ty, TyCtxt, TyVid, IntVid, FloatVid, RegionVid, ConstVid};
 use crate::ty::fold::{TypeFoldable, TypeFolder};
+use crate::mir::interpret::ConstValue;
 
 use super::InferCtxt;
-use super::RegionVariableOrigin;
+use super::{RegionVariableOrigin, ConstVariableOrigin};
 use super::type_variable::TypeVariableOrigin;
 
+use rustc_data_structures::unify as ut;
+use ut::UnifyKey;
+
+use std::cell::RefMut;
 use std::ops::Range;
 
-impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
+fn const_vars_since_snapshot<'tcx>(
+    mut table: RefMut<'_, ut::UnificationTable<ut::InPlace<ConstVid<'tcx>>>>,
+    snapshot: &ut::Snapshot<ut::InPlace<ConstVid<'tcx>>>,
+) -> (Range<ConstVid<'tcx>>, Vec<ConstVariableOrigin>) {
+    let range = table.vars_since_snapshot(snapshot);
+    (range.start..range.end, (range.start.index..range.end.index).map(|index| {
+        table.probe_value(ConstVid::from_index(index)).origin.clone()
+    }).collect())
+}
+
+impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// This rather funky routine is used while processing expected
     /// types. What happens here is that we want to propagate a
     /// coercion through the return type of a fn to its
@@ -59,7 +74,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
         let (mut fudger, value) = self.probe(|snapshot| {
             match f() {
                 Ok(value) => {
-                    let value = self.resolve_type_vars_if_possible(&value);
+                    let value = self.resolve_vars_if_possible(&value);
 
                     // At this point, `value` could in principle refer
                     // to inference variables that have been created during
@@ -79,6 +94,10 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     let region_vars = self.borrow_region_constraints().vars_since_snapshot(
                         &snapshot.region_constraints_snapshot,
                     );
+                    let const_vars = const_vars_since_snapshot(
+                        self.const_unification_table.borrow_mut(),
+                        &snapshot.const_snapshot,
+                    );
 
                     let fudger = InferenceFudger {
                         infcx: self,
@@ -86,6 +105,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                         int_vars,
                         float_vars,
                         region_vars,
+                        const_vars,
                     };
 
                     Ok((fudger, value))
@@ -104,7 +124,8 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
         if fudger.type_vars.0.is_empty() &&
             fudger.int_vars.is_empty() &&
             fudger.float_vars.is_empty() &&
-            fudger.region_vars.0.is_empty() {
+            fudger.region_vars.0.is_empty() &&
+            fudger.const_vars.0.is_empty() {
             Ok(value)
         } else {
             Ok(value.fold_with(&mut fudger))
@@ -112,16 +133,17 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
     }
 }
 
-pub struct InferenceFudger<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
-    infcx: &'a InferCtxt<'a, 'gcx, 'tcx>,
+pub struct InferenceFudger<'a, 'tcx> {
+    infcx: &'a InferCtxt<'a, 'tcx>,
     type_vars: (Range<TyVid>, Vec<TypeVariableOrigin>),
     int_vars: Range<IntVid>,
     float_vars: Range<FloatVid>,
     region_vars: (Range<RegionVid>, Vec<RegionVariableOrigin>),
+    const_vars: (Range<ConstVid<'tcx>>, Vec<ConstVariableOrigin>),
 }
 
-impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for InferenceFudger<'a, 'gcx, 'tcx> {
-    fn tcx<'b>(&'b self) -> TyCtxt<'b, 'gcx, 'tcx> {
+impl<'a, 'tcx> TypeFolder<'tcx> for InferenceFudger<'a, 'tcx> {
+    fn tcx<'b>(&'b self) -> TyCtxt<'tcx> {
         self.infcx.tcx
     }
 
@@ -165,13 +187,29 @@ impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for InferenceFudger<'a, 'gcx, 'tcx> 
     }
 
     fn fold_region(&mut self, r: ty::Region<'tcx>) -> ty::Region<'tcx> {
-        if let ty::ReVar(vid) = r {
+        if let ty::ReVar(vid) = *r {
             if self.region_vars.0.contains(&vid) {
-                let idx = (vid.index() - self.region_vars.0.start.index()) as usize;
+                let idx = vid.index() - self.region_vars.0.start.index();
                 let origin = self.region_vars.1[idx];
                 return self.infcx.next_region_var(origin);
             }
         }
         r
+    }
+
+    fn fold_const(&mut self, ct: &'tcx ty::Const<'tcx>) -> &'tcx ty::Const<'tcx> {
+        if let ty::Const { val: ConstValue::Infer(ty::InferConst::Var(vid)), ty } = ct {
+            if self.const_vars.0.contains(&vid) {
+                // This variable was created during the fudging.
+                // Recreate it with a fresh variable here.
+                let idx = (vid.index - self.const_vars.0.start.index) as usize;
+                let origin = self.const_vars.1[idx];
+                self.infcx.next_const_var(ty, origin)
+            } else {
+                ct
+            }
+        } else {
+            ct.super_fold_with(self)
+        }
     }
 }
