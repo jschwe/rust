@@ -18,8 +18,6 @@ use crate::intrinsics;
 
 pub mod alloc;
 pub mod args;
-#[cfg(feature = "backtrace")]
-pub mod backtrace;
 pub mod condvar;
 pub mod stdio;
 pub mod memchr;

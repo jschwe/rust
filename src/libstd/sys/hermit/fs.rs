@@ -2,7 +2,7 @@ use crate::ffi::{OsString, CString, CStr};
 use crate::fmt;
 use crate::io::{self, Error, ErrorKind};
 use crate::hash::{Hash, Hasher};
-use crate::io::{SeekFrom, IoVec, IoVecMut};
+use crate::io::{SeekFrom, IoSlice, IoSliceMut};
 use crate::path::{Path, PathBuf};
 use crate::sys::time::SystemTime;
 use crate::sys::{unsupported, Void};
@@ -290,7 +290,7 @@ impl File {
         self.0.read(buf)
     }
 
-    pub fn read_vectored(&self, bufs: &mut [IoVecMut<'_>]) -> io::Result<usize> {
+    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
         crate::io::default_read_vectored(|buf| self.read(buf), bufs)
     }
 
@@ -298,7 +298,7 @@ impl File {
         self.0.write(buf)
     }
 
-    pub fn write_vectored(&self, bufs: &[IoVec<'_>]) -> io::Result<usize> {
+    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         crate::io::default_write_vectored(|buf| self.write(buf), bufs)
     }
 

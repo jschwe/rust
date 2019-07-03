@@ -1,5 +1,5 @@
 use crate::io;
-use crate::io::{IoVec, IoVecMut};
+use crate::io::{IoSlice, IoSliceMut};
 
 extern "C" {
     fn sys_write(fd: i32, buf: *const u8, len: usize) -> isize;
@@ -15,10 +15,10 @@ impl Stdin {
     }
 
     pub fn read(&self, data: &mut [u8]) -> io::Result<usize> {
-        self.read_vectored(&mut [IoVecMut::new(data)])
+        self.read_vectored(&mut [IoSliceMut::new(data)])
     }
 
-    pub fn read_vectored(&self, _data: &mut [IoVecMut<'_>]) -> io::Result<usize> {
+    pub fn read_vectored(&self, _data: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
         //ManuallyDrop::new(unsafe { WasiFd::from_raw(libc::STDIN_FILENO as u32) })
         //    .read(data)
         Ok(0)
@@ -45,7 +45,7 @@ impl Stdout {
         }
     }
 
-    pub fn write_vectored(&self, data: &[IoVec<'_>]) -> io::Result<usize> {
+    pub fn write_vectored(&self, data: &[IoSlice<'_>]) -> io::Result<usize> {
         let len;
 
         unsafe {
@@ -83,7 +83,7 @@ impl Stderr {
         }
     }
 
-    pub fn write_vectored(&self, data: &[IoVec<'_>]) -> io::Result<usize> {
+    pub fn write_vectored(&self, data: &[IoSlice<'_>]) -> io::Result<usize> {
         let len;
 
         unsafe {
