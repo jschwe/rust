@@ -9,7 +9,6 @@ pub fn opts() -> TargetOptions {
         "-Wl,--gc-sections".to_string(),
         "-Wl,--as-needed".to_string(),
         "-nostartfiles".to_string(),
-        "-lhermit".to_string()
     ]);
 
     TargetOptions {
