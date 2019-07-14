@@ -12,6 +12,7 @@ use crate::sys_common::os_str_bytes::OsStrExt;
 
 extern {
     fn sys_open(name: *const i8, flags: i32, mode: i32) -> i32;
+    fn sys_unlink(name: *const i8) -> i32;
 }
 
 fn cstr(path: &Path) -> io::Result<CString> {
@@ -337,8 +338,10 @@ pub fn readdir(_p: &Path) -> io::Result<ReadDir> {
     unsupported()
 }
 
-pub fn unlink(_p: &Path) -> io::Result<()> {
-    unsupported()
+pub fn unlink(path: &Path) -> io::Result<()> {
+    let name = cstr(path)?;
+    let _ = unsafe { cvt(sys_unlin(name.as_ptr()))? };
+    Ok(())
 }
 
 pub fn rename(_old: &Path, _new: &Path) -> io::Result<()> {
