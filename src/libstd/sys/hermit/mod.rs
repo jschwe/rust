@@ -49,7 +49,7 @@ pub fn unsupported<T>() -> crate::io::Result<T> {
 
 pub fn unsupported_err() -> crate::io::Error {
     crate::io::Error::new(crate::io::ErrorKind::Other,
-           "operation not supported on hermit yet")
+           "operation not supported on HermitCore yet")
 }
 
 // This enum is used as the storage for a bunch of types which can't actually
