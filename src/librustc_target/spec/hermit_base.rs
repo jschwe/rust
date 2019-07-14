@@ -21,7 +21,7 @@ pub fn opts() -> TargetOptions {
         pre_link_args: args,
         relocation_model: "static".to_string(),
         target_family: None,
-        tls_model: "local-exec".to_string(),
+        tls_model: "initial-exec".to_string(),
         .. Default::default()
     }
 }
