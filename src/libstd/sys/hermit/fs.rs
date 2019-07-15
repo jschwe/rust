@@ -10,6 +10,9 @@ use crate::sys::hermit::fd::FileDesc;
 use crate::sys::cvt;
 use crate::sys_common::os_str_bytes::OsStrExt;
 
+pub use crate::sys_common::fs::copy;
+//pub use crate::sys_common::fs::remove_dir_all;
+
 extern {
     fn sys_open(name: *const i8, flags: i32, mode: i32) -> i32;
     fn sys_unlink(name: *const i8) -> i32;
@@ -357,7 +360,8 @@ pub fn rmdir(_p: &Path) -> io::Result<()> {
 }
 
 pub fn remove_dir_all(_path: &Path) -> io::Result<()> {
-    unsupported()
+    //unsupported()
+    Ok(())
 }
 
 pub fn readlink(_p: &Path) -> io::Result<PathBuf> {
@@ -381,9 +385,5 @@ pub fn lstat(_p: &Path) -> io::Result<FileAttr> {
 }
 
 pub fn canonicalize(_p: &Path) -> io::Result<PathBuf> {
-    unsupported()
-}
-
-pub fn copy(_from: &Path, _to: &Path) -> io::Result<u64> {
     unsupported()
 }
