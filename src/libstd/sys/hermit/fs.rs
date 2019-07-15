@@ -340,7 +340,7 @@ pub fn readdir(_p: &Path) -> io::Result<ReadDir> {
 
 pub fn unlink(path: &Path) -> io::Result<()> {
     let name = cstr(path)?;
-    let _ = unsafe { cvt(sys_unlin(name.as_ptr()))? };
+    let _ = unsafe { cvt(sys_unlink(name.as_ptr()))? };
     Ok(())
 }
 
