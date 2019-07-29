@@ -1,33 +1,62 @@
+use crate::cmp;
 use crate::sys::mutex::Mutex;
 use crate::time::Duration;
 
-pub struct Condvar { }
+pub struct Condvar {
+    identifier: usize,
+}
+
+extern "C" {
+   fn sys_notify(id: usize, count: i32) -> i32;
+   fn sys_wait(id: usize, timeout_ns: i64) -> i32;
+   fn sys_destroy_queue(id: usize) -> i32;
+}
 
 impl Condvar {
     pub const fn new() -> Condvar {
-        Condvar { }
+        Condvar { identifier: 0 }
     }
 
     #[inline]
-    pub unsafe fn init(&mut self) {}
+    pub unsafe fn init(&mut self) {
+        // nothing to do
+    }
 
-    #[inline]
     pub unsafe fn notify_one(&self) {
+         let _ = sys_notify(self.id(), 1);
     }
 
     #[inline]
     pub unsafe fn notify_all(&self) {
+         let _ = sys_notify(self.id(), -1 /* =all */);
     }
 
-    pub unsafe fn wait(&self, _mutex: &Mutex) {
-        panic!("can't block with web assembly")
+    pub unsafe fn wait(&self, mutex: &Mutex) {
+        mutex.unlock();
+        let _ = sys_wait(self.id(), -1 /* no timeout */);
+        mutex.lock();
     }
 
-    pub unsafe fn wait_timeout(&self, _mutex: &Mutex, _dur: Duration) -> bool {
-        panic!("can't block with web assembly");
+    pub unsafe fn wait_timeout(&self, mutex: &Mutex, dur: Duration) -> bool {
+        mutex.unlock();
+        let nanos = dur.as_nanos();
+        let nanos = cmp::min(i64::max_value() as u128, nanos);
+
+        // If the return value is !0 then a timeout happened, so we return
+        // `false` as we weren't actually notified.
+        let ret = sys_wait(self.id(), nanos as i64) == 0;
+        mutex.lock();
+        
+        ret
     }
 
     #[inline]
     pub unsafe fn destroy(&self) {
+        let _ = sys_destroy_queue(self.id());
+    }
+
+    #[inline]
+    fn id(&self) -> usize {
+        &self.identifier as *const usize as usize
     }
 }
