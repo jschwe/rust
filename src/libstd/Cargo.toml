@@ -41,7 +41,7 @@ optional = true
 rand = "0.6.1"
 
 [target.'cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), target_os = "hermit"))'.dependencies]
-smoltcp = { git = "https://github.com/hermitcore/rust.git", branch = "hermit", default-features = false, features = ["socket-udp", "socket-tcp", "proto-ipv4", "rustc-dep-of-std"] }
+smoltcp = { git = "https://github.com/hermitcore/smoltcp.git", branch = "hermit", default-features = false, features = ["socket-udp", "socket-tcp", "proto-ipv4", "rustc-dep-of-std"] }
 
 [target.x86_64-apple-darwin.dependencies]
 rustc_asan = { path = "../librustc_asan" }
