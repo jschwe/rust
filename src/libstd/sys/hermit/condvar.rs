@@ -8,7 +8,8 @@ pub struct Condvar {
 
 extern "C" {
    fn sys_notify(id: usize, count: i32) -> i32;
-   fn sys_wait(id: usize, timeout_ns: i64) -> i32;
+   fn sys_add_queue(id: usize, timeout_ns: i64) -> i32;
+   fn sys_wait(id: usize) -> i32;
    fn sys_destroy_queue(id: usize) -> i32;
 }
 
@@ -32,19 +33,24 @@ impl Condvar {
     }
 
     pub unsafe fn wait(&self, mutex: &Mutex) {
+        // add current task to the wait queue
+        let _ = sys_add_queue(self.id(), -1 /* no timeout */);
         mutex.unlock();
-        let _ = sys_wait(self.id(), -1 /* no timeout */);
+        let _ = sys_wait(self.id());
         mutex.lock();
     }
 
     pub unsafe fn wait_timeout(&self, mutex: &Mutex, dur: Duration) -> bool {
-        mutex.unlock();
         let nanos = dur.as_nanos();
         let nanos = cmp::min(i64::max_value() as u128, nanos);
 
+        // add current task to the wait queue
+        let _ = sys_add_queue(self.id(), nanos as i64);
+
+        mutex.unlock();
         // If the return value is !0 then a timeout happened, so we return
         // `false` as we weren't actually notified.
-        let ret = sys_wait(self.id(), nanos as i64) == 0;
+        let ret = sys_wait(self.id()) == 0;
         mutex.lock();
         
         ret
