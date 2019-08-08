@@ -35,7 +35,7 @@ pub const NORMAL_PRIO: Priority = Priority::from(2);
 
 extern "C" {
     fn sys_usleep(usecs: u64);
-    fn sys_spawn(id: *mut Tid, func: extern "C" fn(usize), arg: usize, prio: u8, core_id: usize) -> i32;
+    fn sys_spawn(id: *mut Tid, func: extern "C" fn(usize), arg: usize, prio: u8, core_id: i32) -> i32;
     fn sys_join(id: Tid) -> i32;
     fn sys_yield();
 }
@@ -50,13 +50,13 @@ unsafe impl Sync for Thread {}
 pub const DEFAULT_MIN_STACK_SIZE: usize = 262144;
 
 impl Thread {
-    pub unsafe fn new(_stack: usize, p: Box<dyn FnOnce()>)
+    pub unsafe fn new_with_coreid(_stack: usize, p: Box<dyn FnOnce()>, core_id: i32)
         -> io::Result<Thread>
     {
         let p = box p;
         let mut tid: Tid = u32::MAX;
         let ret = sys_spawn(&mut tid as *mut Tid, thread_start, &*p as *const _ as *const u8 as usize,
-                            Priority::into(NORMAL_PRIO), 0);
+                            Priority::into(NORMAL_PRIO), core_id);
 
         return if ret == 0 {
             mem::forget(p); // ownership passed to pthread_create
@@ -70,6 +70,12 @@ impl Thread {
                 start_thread(main as *mut u8);
             }
         }
+    }
+
+    pub unsafe fn new(_stack: usize, p: Box<dyn FnOnce()>)
+        -> io::Result<Thread>
+    {
+        Thread::new_with_coreid(stack, p, -1 /* = no specific core */)
     }
 
     #[inline]
