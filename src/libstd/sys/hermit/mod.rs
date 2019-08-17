@@ -114,7 +114,7 @@ unsafe fn run_init_array(
 
 #[cfg(not(test))]
 #[no_mangle]
-pub fn runtime_entry(_argc: i32, _argv: *mut *mut u8, _env: *mut *mut u8) -> ! {
+pub fn runtime_entry(argc: i32, argv: *const *const u8, _env: *mut *mut u8) -> ! {
     extern "C" {
         fn main();
         fn sys_exit(arg: i32) ->!;
@@ -139,6 +139,9 @@ pub fn runtime_entry(_argc: i32, _argv: *mut *mut u8, _env: *mut *mut u8) -> ! {
         if __init_array_end as usize - __init_array_start as usize > 0 {
             run_init_array(mem::transmute::<&*const u8, &extern "C" fn()>(&__init_array_start), mem::transmute::<&*const u8, &extern "C" fn()>(&__init_array_end));
         }
+
+        // initialize environment
+        args::init(argc as isize, argv);
 
         main();
 
