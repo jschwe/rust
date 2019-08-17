@@ -114,7 +114,7 @@ unsafe fn run_init_array(
 
 #[cfg(not(test))]
 #[no_mangle]
-pub fn runtime_entry(argc: i32, argv: *const *const u8, _env: *mut *mut u8) -> ! {
+pub fn runtime_entry(argc: i32, argv: *const *const u8, env: *const *const u8) -> ! {
     extern "C" {
         fn main();
         fn sys_exit(arg: i32) ->!;
@@ -142,6 +142,7 @@ pub fn runtime_entry(argc: i32, argv: *const *const u8, _env: *mut *mut u8) -> !
 
         // initialize environment
         args::init(argc as isize, argv);
+        os::init_environment(env);
 
         main();
 

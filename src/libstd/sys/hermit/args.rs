@@ -40,9 +40,9 @@ impl DoubleEndedIterator for Args {
 }
 
 mod imp {
+    use crate::sys_common::os_str_bytes::*;
     use crate::ptr;
     use crate::ffi::{CStr, OsString};
-    use crate::sys_common::os_str_bytes::*;
     use crate::marker::PhantomData;
     use super::Args;
 

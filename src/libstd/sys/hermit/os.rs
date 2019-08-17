@@ -1,15 +1,17 @@
 use crate::error::Error as StdError;
-use crate::ffi::{OsString, OsStr};
+use crate::ffi::{CStr, OsString, OsStr};
 use crate::fmt;
 use crate::io;
+use crate::marker::PhantomData;
+use crate::memchr;
 use crate::path::{self, PathBuf};
+use crate::ptr;
 use crate::str;
 use crate::sys::{unsupported, Void};
 use crate::collections::HashMap;
 use crate::vec;
 use crate::sync::Mutex;
-use crate::sync::atomic::{AtomicUsize, Ordering};
-use crate::sync::Once;
+use crate::sys_common::os_str_bytes::*;
 
 extern "C" {
     fn sys_getpid() -> u32;
@@ -70,50 +72,87 @@ pub fn current_exe() -> io::Result<PathBuf> {
     unsupported()
 }
 
-static ENV: AtomicUsize = AtomicUsize::new(0);
-static ENV_INIT: Once = Once::new();
+static mut ENV: Option<Mutex<HashMap<OsString, OsString>>> = None;
 
-type EnvStore = Mutex<HashMap<OsString, OsString>>;
-
-fn get_env_store() -> Option<&'static EnvStore> {
-    unsafe { (ENV.load(Ordering::Relaxed) as *const EnvStore).as_ref() }
-}
-
-fn create_env_store() -> &'static EnvStore {
-    ENV_INIT.call_once(|| {
-        ENV.store(Box::into_raw(Box::new(EnvStore::default())) as _, Ordering::Relaxed)
-    });
+pub fn init_environment(env: *const *const u8) {
     unsafe {
-        &*(ENV.load(Ordering::Relaxed) as *const EnvStore)
+        ENV = Some(Mutex::new(HashMap::new()));
+
+        let mut guard = ENV.as_ref().unwrap().lock().unwrap();
+        let mut environ = env;
+        while environ != ptr::null() && *environ != ptr::null() {
+            if let Some((key,value)) = parse(CStr::from_ptr(*environ as *const i8).to_bytes()) {
+                guard.insert(key, value);
+            }
+            environ = environ.offset(1);
+        }
+    }
+
+    fn parse(input: &[u8]) -> Option<(OsString, OsString)> {
+        // Strategy (copied from glibc): Variable name and value are separated
+        // by an ASCII equals sign '='. Since a variable name must not be
+        // empty, allow variable names starting with an equals sign. Skip all
+        // malformed lines.
+        if input.is_empty() {
+            return None;
+        }
+        let pos = memchr::memchr(b'=', &input[1..]).map(|p| p + 1);
+        pos.map(|p| (
+            OsStringExt::from_vec(input[..p].to_vec()),
+            OsStringExt::from_vec(input[p+1..].to_vec()),
+        ))
     }
 }
 
-pub type Env = vec::IntoIter<(OsString, OsString)>;
+pub struct Env {
+    iter: vec::IntoIter<(OsString, OsString)>,
+    _dont_send_or_sync_me: PhantomData<*mut ()>,
+}
 
+impl Iterator for Env {
+    type Item = (OsString, OsString);
+    fn next(&mut self) -> Option<(OsString, OsString)> { self.iter.next() }
+    fn size_hint(&self) -> (usize, Option<usize>) { self.iter.size_hint() }
+}
+
+/// Returns a vector of (variable, value) byte-vector pairs for all the
+/// environment variables of the current process.
 pub fn env() -> Env {
-    let clone_to_vec = |map: &HashMap<OsString, OsString>| -> Vec<_> {
-        map.iter().map(|(k, v)| (k.clone(), v.clone()) ).collect()
-    };
+   unsafe {
+        let guard = ENV.as_ref().unwrap().lock().unwrap();
+        let mut result = Vec::new();
 
-    get_env_store()
-        .map(|env| clone_to_vec(&env.lock().unwrap()) )
-        .unwrap_or_default()
-        .into_iter()
+        for (key, value) in guard.iter() {
+            result.push((key.clone(), value.clone()));
+        }
+
+        return Env {
+            iter: result.into_iter(),
+            _dont_send_or_sync_me: PhantomData,
+        }
+    }
 }
 
 pub fn getenv(k: &OsStr) -> io::Result<Option<OsString>> {
-    Ok(get_env_store().and_then(|s| s.lock().unwrap().get(k).cloned() ))
+    unsafe {
+        match ENV.as_ref().unwrap().lock().unwrap().get_mut(k) {
+            Some(value) => { Ok(Some(value.clone())) },
+            None => { Ok(None) },
+        }
+    }
 }
 
 pub fn setenv(k: &OsStr, v: &OsStr) -> io::Result<()> {
-    let (k, v) = (k.to_owned(), v.to_owned());
-    create_env_store().lock().unwrap().insert(k, v);
+    unsafe {
+        let (k, v) = (k.to_owned(), v.to_owned());
+        ENV.as_ref().unwrap().lock().unwrap().insert(k, v);
+    }
     Ok(())
 }
 
 pub fn unsetenv(k: &OsStr) -> io::Result<()> {
-    if let Some(env) = get_env_store() {
-        env.lock().unwrap().remove(k);
+    unsafe {
+        ENV.as_ref().unwrap().lock().unwrap().remove(k);
     }
     Ok(())
 }
