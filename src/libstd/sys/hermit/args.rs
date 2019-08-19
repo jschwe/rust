@@ -6,7 +6,6 @@ use crate::vec;
 pub unsafe fn init(argc: isize, argv: *const *const u8) { imp::init(argc, argv) }
 
 /// One-time global cleanup.
-#[allow(dead_code)]
 pub unsafe fn cleanup() { imp::cleanup() }
 
 /// Returns the command line arguments
@@ -49,13 +48,13 @@ mod imp {
     use crate::sys_common::mutex::Mutex;
 
     static mut ARGC: isize = 0;
-    static mut ARGV: *const *const u8 = ptr::null();
+    static mut ARGV: *const *const i8 = ptr::null();
     static LOCK: Mutex = Mutex::new();
 
     pub unsafe fn init(argc: isize, argv: *const *const u8) {
         let _guard = LOCK.lock();
         ARGC = argc;
-        ARGV = argv;
+        ARGV = argv as *const const i8;
     }
 
     pub unsafe fn cleanup() {
@@ -75,7 +74,7 @@ mod imp {
         unsafe {
             let _guard = LOCK.lock();
             (0..ARGC).map(|i| {
-                let cstr = CStr::from_ptr(*ARGV.offset(i) as *const i8);
+                let cstr = CStr::from_ptr(*ARGV.offset(i));
                 OsStringExt::from_vec(cstr.to_bytes().to_vec())
             }).collect()
         }

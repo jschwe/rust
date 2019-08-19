@@ -42,6 +42,7 @@ pub mod fast_thread_local;
 use core::{mem,slice};
 pub use crate::sys_common::os_str_bytes as os_str;
 use crate::io::ErrorKind;
+use crate::sys_common::cleanup;
 
 pub fn unsupported<T>() -> crate::io::Result<T> {
     Err(unsupported_err())
@@ -146,6 +147,7 @@ pub fn runtime_entry(argc: i32, argv: *const *const u8, env: *const *const u8) -
 
         main();
 
+        cleanup();
         sys_exit(0);
     }
 }
