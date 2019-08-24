@@ -54,7 +54,7 @@ mod imp {
     pub unsafe fn init(argc: isize, argv: *const *const u8) {
         let _guard = LOCK.lock();
         ARGC = argc;
-        ARGV = argv as *const const i8;
+        ARGV = argv as *const *const i8;
     }
 
     pub unsafe fn cleanup() {
