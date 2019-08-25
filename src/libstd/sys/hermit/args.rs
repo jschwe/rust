@@ -3,7 +3,7 @@ use crate::marker::PhantomData;
 use crate::vec;
 
 /// One-time global initialization.
-pub unsafe fn init(argc: isize, argv: *const *const u8) { imp::init(argc, argv) }
+pub unsafe fn init(argc: isize, argv: *const *const c_char) { imp::init(argc, argv) }
 
 /// One-time global cleanup.
 pub unsafe fn cleanup() { imp::cleanup() }
@@ -48,13 +48,13 @@ mod imp {
     use crate::sys_common::mutex::Mutex;
 
     static mut ARGC: isize = 0;
-    static mut ARGV: *const *const i8 = ptr::null();
+    static mut ARGV: *const *const c_char = ptr::null();
     static LOCK: Mutex = Mutex::new();
 
-    pub unsafe fn init(argc: isize, argv: *const *const u8) {
+    pub unsafe fn init(argc: isize, argv: *const *const c_char) {
         let _guard = LOCK.lock();
         ARGC = argc;
-        ARGV = argv as *const *const i8;
+        ARGV = argv;
     }
 
     pub unsafe fn cleanup() {

@@ -74,14 +74,14 @@ pub fn current_exe() -> io::Result<PathBuf> {
 
 static mut ENV: Option<Mutex<HashMap<OsString, OsString>>> = None;
 
-pub fn init_environment(env: *const *const u8) {
+pub fn init_environment(env: *const *const c_char) {
     unsafe {
         ENV = Some(Mutex::new(HashMap::new()));
 
         let mut guard = ENV.as_ref().unwrap().lock().unwrap();
         let mut environ = env;
         while environ != ptr::null() && *environ != ptr::null() {
-            if let Some((key,value)) = parse(CStr::from_ptr(*environ as *const i8).to_bytes()) {
+            if let Some((key,value)) = parse(CStr::from_ptr(*environ).to_bytes()) {
                 guard.insert(key, value);
             }
             environ = environ.offset(1);

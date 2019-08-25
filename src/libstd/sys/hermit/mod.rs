@@ -115,7 +115,7 @@ pub fn init() {
 
 #[cfg(not(test))]
 #[no_mangle]
-pub extern "C" fn runtime_entry(argc: i32, argv: *const *const u8, env: *const *const u8) -> ! {
+pub extern "C" fn runtime_entry(argc: i32, argv: *const *const c_char, env: *const *const c_char) -> ! {
     extern "C" {
         fn main();
         fn sys_exit(arg: i32) ->!;
