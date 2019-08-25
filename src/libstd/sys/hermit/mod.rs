@@ -39,7 +39,6 @@ pub mod time;
 pub mod thread_local;
 pub mod fast_thread_local;
 
-//use core::{mem,slice};
 pub use crate::sys_common::os_str_bytes as os_str;
 use crate::io::ErrorKind;
 use crate::sys_common::cleanup;
@@ -101,56 +100,22 @@ pub unsafe extern "C" fn __rust_abort() {
 pub fn init() {
 }
 
-/*unsafe fn run_init_array(
-    init_array_start: &extern "C" fn(),
-    init_array_end: &extern "C" fn(),
-) {
-    let n = (init_array_end as *const _ as usize -
-        init_array_start as *const _ as usize) /
-        mem::size_of::<extern "C" fn()>();
-
-    for f in slice::from_raw_parts(init_array_start, n) {
-        f();
-    }
-}*/
-
 #[cfg(not(test))]
 #[no_mangle]
-pub extern "C" fn runtime_entry(argc: i32, argv: *const *const c_char, env: *const *const c_char) -> ! {
+pub unsafe extern "C" fn runtime_entry(argc: i32, argv: *const *const c_char, env: *const *const c_char) -> ! {
     extern "C" {
         fn main();
         fn sys_exit(arg: i32) ->!;
-
-        /*#[linkage = "extern_weak"]
-        static __preinit_array_start: *const u8;
-        #[linkage = "extern_weak"]
-        static __preinit_array_end: *const u8;
-        #[linkage = "extern_weak"]
-        static __init_array_start: *const u8;
-        #[linkage = "extern_weak"]
-        static __init_array_end: *const u8;*/
     }
 
-    unsafe {
-        // run preinit array
-        /*if __preinit_array_end as usize - __preinit_array_start as usize > 0 {
-            run_init_array(mem::transmute::<&*const u8, &extern "C" fn()>(&__preinit_array_start), mem::transmute::<&*const u8, &extern "C" fn()>(&__preinit_array_end));
-        }*/
+    // initialize environment
+    args::init(argc as isize, argv);
+    os::init_environment(env);
 
-        // run init array
-        /*if __init_array_end as usize - __init_array_start as usize > 0 {
-            run_init_array(mem::transmute::<&*const u8, &extern "C" fn()>(&__init_array_start), mem::transmute::<&*const u8, &extern "C" fn()>(&__init_array_end));
-        }*/
+    main();
 
-        // initialize environment
-        args::init(argc as isize, argv);
-        os::init_environment(env);
-
-        main();
-
-        cleanup();
-        sys_exit(0);
-    }
+    cleanup();
+    sys_exit(0);
 }
 
 pub fn decode_error_kind(errno: i32) -> ErrorKind {
