@@ -39,7 +39,7 @@ pub mod time;
 pub mod thread_local;
 pub mod fast_thread_local;
 
-use core::{mem,slice};
+//use core::{mem,slice};
 pub use crate::sys_common::os_str_bytes as os_str;
 use crate::io::ErrorKind;
 use crate::sys_common::cleanup;
