@@ -342,9 +342,6 @@ extern crate unwind;
 #[cfg(not(test))]
 extern crate cfg_if;
 
-//#[cfg(target_os = "hermit")]
-//extern crate smoltcp;
-
 // During testing, this crate is not actually the "real" std library, but rather
 // it links to the real std library, which was compiled from this same source
 // code. So any lang items std defines are conditionally excluded (or else they

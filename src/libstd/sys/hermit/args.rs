@@ -44,6 +44,7 @@ mod imp {
     use crate::ffi::{CStr, OsString};
     use crate::marker::PhantomData;
     use super::Args;
+    use libc::c_char;
 
     use crate::sys_common::mutex::Mutex;
 

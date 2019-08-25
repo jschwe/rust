@@ -12,6 +12,7 @@ use crate::collections::HashMap;
 use crate::vec;
 use crate::sync::Mutex;
 use crate::sys_common::os_str_bytes::*;
+use libc::c_char;
 
 extern "C" {
     fn sys_getpid() -> u32;

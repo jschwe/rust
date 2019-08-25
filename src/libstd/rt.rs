@@ -18,6 +18,7 @@ pub use crate::panicking::{begin_panic, begin_panic_fmt, update_panic_count};
 
 // To reduce the generated code of the new `lang_start`, this function is doing
 // the real work.
+#[cfg(not(target_os = "hermit"))]
 #[cfg(not(test))]
 fn lang_start_internal(main: &(dyn Fn() -> i32 + Sync + crate::panic::RefUnwindSafe),
                        argc: isize, argv: *const *const u8) -> isize {
@@ -56,6 +57,7 @@ fn lang_start_internal(main: &(dyn Fn() -> i32 + Sync + crate::panic::RefUnwindS
     }
 }
 
+#[cfg(not(target_os = "hermit"))]
 #[cfg(not(test))]
 #[lang = "start"]
 fn lang_start<T: crate::process::Termination + 'static>
