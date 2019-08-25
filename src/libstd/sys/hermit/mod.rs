@@ -100,7 +100,7 @@ pub unsafe extern "C" fn __rust_abort() {
 pub fn init() {
 }
 
-unsafe fn run_init_array(
+/*unsafe fn run_init_array(
     init_array_start: &extern "C" fn(),
     init_array_end: &extern "C" fn(),
 ) {
@@ -111,7 +111,7 @@ unsafe fn run_init_array(
     for f in slice::from_raw_parts(init_array_start, n) {
         f();
     }
-}
+}*/
 
 #[cfg(not(test))]
 #[no_mangle]
@@ -120,26 +120,26 @@ pub extern "C" fn runtime_entry(argc: i32, argv: *const *const u8, env: *const *
         fn main();
         fn sys_exit(arg: i32) ->!;
 
-        #[linkage = "extern_weak"]
+        /*#[linkage = "extern_weak"]
         static __preinit_array_start: *const u8;
         #[linkage = "extern_weak"]
         static __preinit_array_end: *const u8;
         #[linkage = "extern_weak"]
         static __init_array_start: *const u8;
         #[linkage = "extern_weak"]
-        static __init_array_end: *const u8;
+        static __init_array_end: *const u8;*/
     }
 
     unsafe {
         // run preinit array
-        if __preinit_array_end as usize - __preinit_array_start as usize > 0 {
+        /*if __preinit_array_end as usize - __preinit_array_start as usize > 0 {
             run_init_array(mem::transmute::<&*const u8, &extern "C" fn()>(&__preinit_array_start), mem::transmute::<&*const u8, &extern "C" fn()>(&__preinit_array_end));
-        }
+        }*/
 
         // run init array
-        if __init_array_end as usize - __init_array_start as usize > 0 {
+        /*if __init_array_end as usize - __init_array_start as usize > 0 {
             run_init_array(mem::transmute::<&*const u8, &extern "C" fn()>(&__init_array_start), mem::transmute::<&*const u8, &extern "C" fn()>(&__init_array_end));
-        }
+        }*/
 
         // initialize environment
         args::init(argc as isize, argv);
