@@ -6,6 +6,7 @@ impl Handler {
     }
 }
 
+#[allow(dead_code)]
 #[inline]
 pub unsafe fn init() {
 }

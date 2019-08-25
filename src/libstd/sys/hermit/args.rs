@@ -1,6 +1,7 @@
 use crate::ffi::OsString;
 use crate::marker::PhantomData;
 use crate::vec;
+use libc::c_char;
 
 /// One-time global initialization.
 pub unsafe fn init(argc: isize, argv: *const *const c_char) { imp::init(argc, argv) }

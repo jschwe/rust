@@ -96,6 +96,7 @@ pub unsafe extern "C" fn __rust_abort() {
     abort_internal();
 }
 
+#[allow(dead_code)]
 #[cfg(not(test))]
 pub fn init() {
 }
