@@ -58,13 +58,14 @@ pub fn unsupported_err() -> crate::io::Error {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum Void {}
 
-pub unsafe fn strlen(mut s: *const c_char) -> usize {
-    let mut n = 0;
-    while *s != 0 {
-        n += 1;
-        s = s.offset(1);
+pub unsafe fn strlen(start: *const c_char) -> usize {
+    let mut str = start;
+
+    while *str != 0 {
+        str = str.offset(1);
     }
-    return n
+
+    (str as usize) - (start as usize)
 }
 
 #[no_mangle]
