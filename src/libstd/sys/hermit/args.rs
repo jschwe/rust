@@ -4,7 +4,7 @@ use crate::vec;
 use libc::c_char;
 
 /// One-time global initialization.
-pub unsafe fn init(argc: isize, argv: *const *const c_char) { imp::init(argc, argv) }
+pub unsafe fn init(argc: isize, argv: *const *const u8) { imp::init(argc, argv as *const *const c_char) }
 
 /// One-time global cleanup.
 pub unsafe fn cleanup() { imp::cleanup() }

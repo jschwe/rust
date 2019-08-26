@@ -41,7 +41,6 @@ pub mod fast_thread_local;
 
 pub use crate::sys_common::os_str_bytes as os_str;
 use crate::io::ErrorKind;
-use crate::sys_common::cleanup;
 
 pub fn unsupported<T>() -> crate::io::Result<T> {
     Err(unsupported_err())
@@ -96,28 +95,24 @@ pub unsafe extern "C" fn __rust_abort() {
     abort_internal();
 }
 
-#[allow(dead_code)]
 #[cfg(not(test))]
 pub fn init() {
 }
 
 #[cfg(not(test))]
 #[no_mangle]
-#[lang = "start"]
 pub unsafe extern "C" fn runtime_entry(argc: i32, argv: *const *const c_char, env: *const *const c_char) -> ! {
     extern "C" {
-        fn main();
+        fn main(argc: isize, argv: *const *const c_char) -> i32;
         fn sys_exit(arg: i32) ->!;
     }
 
     // initialize environment
-    args::init(argc as isize, argv);
     os::init_environment(env);
 
-    main();
+    let result = main(argc as isize, argv);
 
-    cleanup();
-    sys_exit(0);
+    sys_exit(result);
 }
 
 pub fn decode_error_kind(errno: i32) -> ErrorKind {

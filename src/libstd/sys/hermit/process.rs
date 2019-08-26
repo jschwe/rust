@@ -6,6 +6,9 @@ use crate::sys::pipe::AnonPipe;
 use crate::sys::{unsupported, Void};
 use crate::sys_common::process::{CommandEnv, DefaultEnvKey};
 
+const EXIT_SUCCESS: u8 = 0;
+const EXIT_FAILURE: u8 = 1;
+
 ////////////////////////////////////////////////////////////////////////////////
 // Command
 ////////////////////////////////////////////////////////////////////////////////
@@ -78,53 +81,58 @@ impl fmt::Debug for Command {
     }
 }
 
-pub struct ExitStatus(Void);
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct ExitStatus(i32);
 
 impl ExitStatus {
+    fn exited(&self) -> bool {
+        self.0 & 0x7F == 0
+    }
+
     pub fn success(&self) -> bool {
-        match self.0 {}
+        self.code() == Some(0)
     }
 
     pub fn code(&self) -> Option<i32> {
-        match self.0 {}
+        if self.exited() {
+            Some((self.0 >> 8) & 0xFF)
+        } else {
+            None
+        }
+    }
+
+    pub fn signal(&self) -> Option<i32> {
+        if !self.exited() {
+            Some(self.0 & 0x7F)
+        } else {
+            None
+        }
     }
 }
 
-impl Clone for ExitStatus {
-    fn clone(&self) -> ExitStatus {
-        match self.0 {}
-    }
-}
-
-impl Copy for ExitStatus {}
-
-impl PartialEq for ExitStatus {
-    fn eq(&self, _other: &ExitStatus) -> bool {
-        match self.0 {}
-    }
-}
-
-impl Eq for ExitStatus {
-}
-
-impl fmt::Debug for ExitStatus {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {}
+impl From<i32> for ExitStatus {
+    fn from(a: i32) -> ExitStatus {
+        ExitStatus(a)
     }
 }
 
 impl fmt::Display for ExitStatus {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {}
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(code) = self.code() {
+            write!(f, "exit code: {}", code)
+        } else {
+            let signal = self.signal().unwrap();
+            write!(f, "signal: {}", signal)
+        }
     }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct ExitCode(bool);
+pub struct ExitCode(u8);
 
 impl ExitCode {
-    pub const SUCCESS: ExitCode = ExitCode(false);
-    pub const FAILURE: ExitCode = ExitCode(true);
+    pub const SUCCESS: ExitCode = ExitCode(EXIT_SUCCESS as _);
+    pub const FAILURE: ExitCode = ExitCode(EXIT_FAILURE as _);
 
     pub fn as_i32(&self) -> i32 {
         self.0 as i32
