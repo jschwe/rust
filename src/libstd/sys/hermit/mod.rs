@@ -103,6 +103,7 @@ pub fn init() {
 
 #[cfg(not(test))]
 #[no_mangle]
+#[lang = "start"]
 pub unsafe extern "C" fn runtime_entry(argc: i32, argv: *const *const c_char, env: *const *const c_char) -> ! {
     extern "C" {
         fn main();
