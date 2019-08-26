@@ -97,6 +97,9 @@ pub unsafe extern "C" fn __rust_abort() {
 
 #[cfg(not(test))]
 pub fn init() {
+    unsafe {
+        let _ = net::init();
+    }
 }
 
 #[cfg(not(test))]
@@ -108,7 +111,7 @@ pub unsafe extern "C" fn runtime_entry(argc: i32, argv: *const *const c_char, en
     }
 
     // initialize environment
-    os::init_environment(env);
+    os::init_environment(env as *const *const i8);
 
     let result = main(argc as isize, argv);
 

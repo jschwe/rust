@@ -1,9 +1,240 @@
+#![allow(unused_mut)]
+#![allow(unused_variables)]
+#![allow(dead_code)]
+
 use crate::fmt;
 use crate::io::{self, IoSlice, IoSliceMut};
 use crate::net::{SocketAddr, Shutdown, Ipv4Addr, Ipv6Addr};
-use crate::time::Duration;
+use crate::time::{self,Duration};
 use crate::sys::{unsupported, Void};
 use crate::convert::TryFrom;
+use crate::{ptr,str};
+use crate::sys::hermit::thread::Tid;
+use crate::ffi::c_void;
+
+#[allow(unused_extern_crates)]
+pub extern crate smoltcp;
+
+use smoltcp::iface::{EthernetInterfaceBuilder, NeighborCache, Routes};
+use smoltcp::phy::{self, Device, DeviceCapabilities};
+use smoltcp::socket::SocketSet;
+use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
+
+extern "C" {
+    fn sys_spawn(id: *mut Tid, func: extern "C" fn(usize), arg: usize, prio: u8, core_id: isize) -> i32;
+    fn sys_network_init(sem: *const c_void, ip: &mut [u8; 4], gateway: &mut [u8; 4], mac: &mut [u8; 18]) -> i32;
+    fn sys_sem_init(sem: *mut *const c_void, value: u32) -> i32;
+    fn sys_sem_timedwait(sem: *const c_void, ms: u32) -> i32;
+    fn sys_is_polling() -> bool;
+}
+
+const MAX_MSG_SIZE: usize = 1792;
+
+extern "C" fn networkd(_: usize) {
+    let mut ip: [u8; 4] = [0; 4];
+    let mut gateway: [u8; 4] = [0; 4];
+    let mut mac: [u8; 18] = [0; 18];
+    let mut sem: *const c_void = ptr::null();
+    
+    let ret = unsafe { sys_sem_init(&mut sem as *mut *const c_void, 0) };
+    if ret != 0 {
+        return;
+    }
+
+    let ret = unsafe { sys_network_init(sem, &mut ip, &mut gateway, &mut mac) };
+    if ret != 0 {
+        return;
+    }
+
+    let mut neighbor_cache_entries = [None; 8];
+    let mut neighbor_cache = NeighborCache::new(&mut neighbor_cache_entries[..]);
+    let mac_str = str::from_utf8(&mac).unwrap();
+    let ethernet_addr = EthernetAddress([
+        u8::from_str_radix(&mac_str[0..2], 16).unwrap(),
+        u8::from_str_radix(&mac_str[3..5], 16).unwrap(),
+        u8::from_str_radix(&mac_str[6..8], 16).unwrap(),
+        u8::from_str_radix(&mac_str[9..11], 16).unwrap(),
+        u8::from_str_radix(&mac_str[12..14], 16).unwrap(),
+        u8::from_str_radix(&mac_str[15..17], 16).unwrap(),
+    ]);
+    let mut ip_addrs = [IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), 24)];
+    let default_gw = Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]);
+    let mut routes_storage = [None; 1];
+    let mut routes = Routes::new(&mut routes_storage[..]);
+    routes.add_default_ipv4_route(default_gw).unwrap();
+    let device = DeviceNet::new();
+
+    let mut iface = EthernetInterfaceBuilder::new(device)
+        .ethernet_addr(ethernet_addr)
+        .neighbor_cache(neighbor_cache)
+        .ip_addrs(&mut ip_addrs[..])
+        .routes(routes)
+        .finalize();
+
+    let mut socket_set_entries: [_; 2] = Default::default();
+    let mut socket_set = SocketSet::new(&mut socket_set_entries[..]);
+    let start = time::SystemTime::now();
+
+    loop {
+        let timestamp = time::SystemTime::now().duration_since(start).unwrap();
+        let timestamp_ms = (timestamp.as_secs() * 1_000) as i64 + (timestamp.subsec_nanos() / 1_000_000) as i64;
+
+        match iface.poll(&mut socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
+            Ok(_) => {},
+            Err(_) => {}
+        }
+
+        if unsafe{ !sys_is_polling() } {
+            let delay = match iface.poll_delay(&socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
+                  Some(duration) => {
+                      // Calculate the maximum sleep time in milliseconds.
+                      if duration.millis() > 0 {
+                          duration.millis()
+                      } else {
+                          1
+                      }
+                  },
+                  None => { 1 },
+            };
+
+            unsafe {
+               let _ = sys_sem_timedwait(sem, delay as u32);
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DeviceNet {
+    mtu: usize,
+}
+
+impl DeviceNet {
+    /// Creates a network device for HermitCore.
+    ///
+    /// Every packet transmitted through this device will be received through it
+    /// in FIFO order.
+    pub fn new() -> DeviceNet {
+        DeviceNet { mtu: 1500 }
+    }
+}
+
+impl<'a> Device<'a> for DeviceNet {
+    type RxToken = RxToken;
+    type TxToken = TxToken;
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut cap = DeviceCapabilities::default();
+        cap.max_transmission_unit = self.mtu;
+    	cap
+    }
+
+    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+        extern "C" {
+           fn sys_netread(buf: usize, len: usize) -> usize;
+        }
+
+        let mut rx = RxToken::new();
+        let ret = unsafe { sys_netread(rx.buffer.as_mut_ptr() as usize, MAX_MSG_SIZE) };
+
+        if ret > 0 {
+            let tx = TxToken::new();
+            rx.resize(ret);
+
+            Some((rx, tx))
+        } else {
+            None
+        }
+    }
+
+    fn transmit(&'a mut self) -> Option<Self::TxToken> {
+        Some(TxToken::new())
+    }
+}
+
+#[doc(hidden)]
+pub struct RxToken {
+    buffer: [u8; MAX_MSG_SIZE],
+    len: usize,
+}
+
+impl RxToken {
+    pub fn new() -> RxToken {
+        RxToken {
+            buffer: [0; MAX_MSG_SIZE],
+            len: MAX_MSG_SIZE,
+        }
+    }
+
+    pub fn resize(&mut self, len: usize) {
+        if len <= MAX_MSG_SIZE {
+            self.len = len;
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+}
+
+impl phy::RxToken for RxToken {
+    fn consume<R, F>(mut self, _timestamp: smoltcp::time::Instant, f: F) -> smoltcp::Result<R>
+    where
+    	F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+    {
+        let (first, _) = self.buffer.split_at_mut(self.len);
+        f(first)
+    }
+}
+
+#[doc(hidden)]
+pub struct TxToken;
+
+impl TxToken {
+    pub const fn new() -> Self {
+    	TxToken {}
+    }
+
+    fn write(&self, data: usize, len: usize) -> usize {
+        extern "C" {
+           fn sys_netwrite(buf: usize, len: usize) -> usize;
+        }
+
+        unsafe { sys_netwrite(data, len) }
+    }
+}
+
+impl phy::TxToken for TxToken {
+    fn consume<R, F>(self, _timestamp: smoltcp::time::Instant, len: usize, f: F) -> smoltcp::Result<R>
+    where
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+    {
+        let mut buffer = vec![0; len];
+        let result = f(&mut buffer);
+        if result.is_ok() {
+            self.write(buffer.as_ptr() as usize, len);
+        }
+        result
+    }
+}
+
+// Iinitializes HermitCore's network stack
+pub unsafe fn init() -> io::Result<()> {
+    // create thread to handle IP packets
+    let mut tid: Tid = 0;
+    let ret = sys_spawn(&mut tid as *mut Tid,
+                        networkd /* thread entry point */,
+                        0 /* no argument */,
+                        3 /* = priority above normal */,
+                        0 /* networkd should always use core 0 */
+              );
+
+    if ret != 0 {
+        return Err(io::Error::new(io::ErrorKind::Other, "Unable to create thread"));
+    }
+
+    Ok(())
+}
 
 pub struct TcpStream(Void);
 

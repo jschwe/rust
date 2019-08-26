@@ -12,7 +12,6 @@ use crate::collections::HashMap;
 use crate::vec;
 use crate::sync::Mutex;
 use crate::sys_common::os_str_bytes::*;
-use libc::c_char;
 
 extern "C" {
     fn sys_getpid() -> u32;
@@ -75,7 +74,7 @@ pub fn current_exe() -> io::Result<PathBuf> {
 
 static mut ENV: Option<Mutex<HashMap<OsString, OsString>>> = None;
 
-pub fn init_environment(env: *const *const c_char) {
+pub fn init_environment(env: *const *const i8) {
     unsafe {
         ENV = Some(Mutex::new(HashMap::new()));
 

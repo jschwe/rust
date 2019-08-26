@@ -1,10 +1,9 @@
 use crate::ffi::OsString;
 use crate::marker::PhantomData;
 use crate::vec;
-use libc::c_char;
 
 /// One-time global initialization.
-pub unsafe fn init(argc: isize, argv: *const *const u8) { imp::init(argc, argv as *const *const c_char) }
+pub unsafe fn init(argc: isize, argv: *const *const u8) { imp::init(argc, argv) }
 
 /// One-time global cleanup.
 pub unsafe fn cleanup() { imp::cleanup() }
@@ -45,15 +44,14 @@ mod imp {
     use crate::ffi::{CStr, OsString};
     use crate::marker::PhantomData;
     use super::Args;
-    use libc::c_char;
 
     use crate::sys_common::mutex::Mutex;
 
     static mut ARGC: isize = 0;
-    static mut ARGV: *const *const c_char = ptr::null();
+    static mut ARGV: *const *const u8 = ptr::null();
     static LOCK: Mutex = Mutex::new();
 
-    pub unsafe fn init(argc: isize, argv: *const *const c_char) {
+    pub unsafe fn init(argc: isize, argv: *const *const u8) {
         let _guard = LOCK.lock();
         ARGC = argc;
         ARGV = argv;
@@ -76,7 +74,7 @@ mod imp {
         unsafe {
             let _guard = LOCK.lock();
             (0..ARGC).map(|i| {
-                let cstr = CStr::from_ptr(*ARGV.offset(i));
+                let cstr = CStr::from_ptr(*ARGV.offset(i) as *const i8);
                 OsStringExt::from_vec(cstr.to_bytes().to_vec())
             }).collect()
         }
