@@ -26,6 +26,7 @@ extern "C" {
     fn sys_sem_init(sem: *mut *const c_void, value: u32) -> i32;
     fn sys_sem_timedwait(sem: *const c_void, ms: u32) -> i32;
     fn sys_is_polling() -> bool;
+    fn sys_yield();
 }
 
 const MAX_MSG_SIZE: usize = 1792;
@@ -232,6 +233,9 @@ pub unsafe fn init() -> io::Result<()> {
     if ret != 0 {
         return Err(io::Error::new(io::ErrorKind::Other, "Unable to create thread"));
     }
+
+    // make sure that the thread gets computation time
+    sys_yield();
 
     Ok(())
 }
