@@ -78,7 +78,7 @@ extern "C" fn networkd(_: usize) {
 
     loop {
         let timestamp = time::SystemTime::now().duration_since(start).unwrap();
-        let timestamp_ms = (timestamp.as_secs() * 1_000) as i64 + (timestamp.subsec_nanos() / 1_000_000) as i64;
+        let timestamp_ms = (timestamp.as_secs() * 1_000) as i64 + timestamp.subsec_millis() as i64;
 
         match iface.poll(&mut socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
             Ok(_) => {},
@@ -89,8 +89,8 @@ extern "C" fn networkd(_: usize) {
             let delay = match iface.poll_delay(&socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
                   Some(duration) => {
                       // Calculate the maximum sleep time in milliseconds.
-                      if duration.millis() > 0 {
-                          duration.millis()
+                      if duration.total_millis() > 0 {
+                          duration.total_millis()
                       } else {
                           1
                       }
