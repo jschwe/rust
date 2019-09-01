@@ -25,6 +25,7 @@ extern "C" {
     fn sys_network_init(sem: *const c_void, ip: &mut [u8; 4], gateway: &mut [u8; 4], mac: &mut [u8; 18]) -> i32;
     fn sys_sem_init(sem: *mut *const c_void, value: u32) -> i32;
     fn sys_sem_timedwait(sem: *const c_void, ms: u32) -> i32;
+    fn sys_sem_trywait(sem: *const c_void) -> i32;
     fn sys_is_polling() -> bool;
     fn sys_yield();
 }
@@ -86,21 +87,20 @@ extern "C" fn networkd(_: usize) {
         }
 
         if unsafe{ !sys_is_polling() } {
-            let delay = match iface.poll_delay(&socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
+            match iface.poll_delay(&socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
                   Some(duration) => {
                       // Calculate the maximum sleep time in milliseconds.
-                      if duration.total_millis() > 0 {
-                          duration.total_millis()
+                      let delay = duration.total_millis();
+                      if delay > 0 {
+                          let _ = unsafe { sys_sem_timedwait(sem, delay as u32) };
                       } else {
-                          1
+                          let _ = unsafe { sys_sem_trywait(sem) };
                       }
                   },
-                  None => { 1 },
+                  None => {
+                      let _ = unsafe { sys_sem_trywait(sem) };
+                  },
             };
-
-            unsafe {
-               let _ = sys_sem_timedwait(sem, delay as u32);
-            }
         }
     }
 }
