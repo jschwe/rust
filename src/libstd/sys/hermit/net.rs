@@ -98,7 +98,7 @@ extern "C" fn networkd(_: usize) {
                       }
                   },
                   None => {
-                      let _ = unsafe { sys_sem_trywait(sem) };
+                      let _ = unsafe { sys_sem_timedwait(sem, 0) };
                   },
             };
         }
