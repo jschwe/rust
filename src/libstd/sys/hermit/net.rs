@@ -17,7 +17,7 @@ use crate::time::{self,Duration};
 #[allow(unused_extern_crates)]
 pub extern crate smoltcp;
 
-use smoltcp::iface::{EthernetInterfaceBuilder, NeighborCache, Routes};
+use smoltcp::iface::{EthernetInterfaceBuilder, EthernetInterface, NeighborCache, Routes};
 use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::socket::SocketSet;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
@@ -258,7 +258,7 @@ extern "C" fn networkd(_: usize) {
 
     loop {
         let delay = {
-            NETWORKD.as_ref().unwrap().lock().unwrap().handle()
+            NETWORKD.as_ref().unwrap().lock().unwrap().poll()
         };
 
         let _ = unsafe { sys_sem_timedwait(sem, delay) };
