@@ -35,14 +35,14 @@ extern "C" {
 const MAX_MSG_SIZE: usize = 1792;
 const MAX_SOCKETS: usize = 32;
 
-static NETWORKD: Option<Mutex<NetworkD>> = None;
+static NETWORKD: Option<Mutex<NetworkD<'_, '_, '_>>> = None;
 
 struct NetworkD<'b, 'c, 'e> {
     ip: [u8; 4],
     gateway: [u8; 4],
     mac: [u8; 18],
     sem: *const c_void,
-    iface: EthernetInterfaceBuilder<'b, 'c, 'e, DeviceNet>
+    iface: EthernetInterface<'b, 'c, 'e, DeviceNet>
 }
 
 impl<'b, 'c, 'e> NetworkD<'b, 'c, 'e> {
