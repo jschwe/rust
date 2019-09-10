@@ -62,7 +62,7 @@ impl<'b, 'c, 'e> NetworkD<'b, 'c, 'e> {
             panic!("Unable to initialize network");
         }
 
-        let mut neighbor_cache_entries = [None; 8];
+        let mut neighbor_cache_entries = Box::new([None; 8]);
         let mut neighbor_cache = NeighborCache::new(&mut neighbor_cache_entries[..]);
         let mac_str = str::from_utf8(&mac).unwrap();
         let ethernet_addr = EthernetAddress([
@@ -73,9 +73,9 @@ impl<'b, 'c, 'e> NetworkD<'b, 'c, 'e> {
             u8::from_str_radix(&mac_str[12..14], 16).unwrap(),
             u8::from_str_radix(&mac_str[15..17], 16).unwrap(),
         ]);
-        let mut ip_addrs = [IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), 24)];
+        let mut ip_addrs = Box::new([IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), 24)]);
         let default_gw = Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]);
-        let mut routes_storage = [None; 1];
+        let routes_storage = Box::new([None; 1]);
         let mut routes = Routes::new(&mut routes_storage[..]);
         routes.add_default_ipv4_route(default_gw).unwrap();
         let device = DeviceNet::new();
