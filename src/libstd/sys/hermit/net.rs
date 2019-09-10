@@ -80,13 +80,6 @@ impl<'b, 'c, 'e> NetworkD<'b, 'c, 'e> {
         routes.add_default_ipv4_route(default_gw).unwrap();
         let device = DeviceNet::new();
 
-        let mut iface = EthernetInterfaceBuilder::new(device)
-            .ethernet_addr(ethernet_addr)
-            .neighbor_cache(neighbor_cache)
-            .ip_addrs(&mut ip_addrs[..])
-            .routes(routes)
-            .finalize();
-
         NetworkD {
             ip: ip,
             gateway: gateway,
