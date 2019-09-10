@@ -267,7 +267,7 @@ extern "C" fn networkd(_: usize) {
 
 // Iinitializes HermitCore's network stack
 pub unsafe fn init() -> io::Result<()> {
-    NETWORKD = Some(Mutex::new(NetworkD::<DeviceNet>::new()));
+    NETWORKD = Some(Mutex::new(NetworkD::new()));
 
     // create thread to handle IP packets
     let mut tid: Tid = 0;
