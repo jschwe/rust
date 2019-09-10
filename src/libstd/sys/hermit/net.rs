@@ -85,11 +85,11 @@ impl<'b, 'c, 'e> NetworkD<'b, 'c, 'e> {
             gateway: gateway,
             mac: mac,
             sem: sem,
-            iface: EthernetInterfaceBuilder::new(device)
-                .ethernet_addr(ethernet_addr)
-                .neighbor_cache(neighbor_cache)
-                .ip_addrs(&mut ip_addrs[..])
-                .routes(routes)
+            iface: EthernetInterfaceBuilder::new(device.to_owned())
+                .ethernet_addr(ethernet_addr.to_owned())
+                .neighbor_cache(neighbor_cache.to_owned())
+                .ip_addrs(&mut ip_addrs.to_owned()[..])
+                .routes(routes.to_owned())
                 .finalize()
         }
     }
