@@ -79,18 +79,19 @@ impl<'b, 'c, 'e> NetworkD<'b, 'c, 'e> {
         let mut routes = Routes::new(&mut routes_storage[..]);
         routes.add_default_ipv4_route(default_gw).unwrap();
         let device = DeviceNet::new();
+        let iface = EthernetInterfaceBuilder::new(device)
+                .ethernet_addr(ethernet_addr)
+                .neighbor_cache(neighbor_cache)
+                .ip_addrs(&mut ip_addrs[..])
+                .routes(routes)
+                .finalize();
 
         NetworkD {
             ip: ip,
             gateway: gateway,
             mac: mac,
             sem: sem,
-            iface: EthernetInterfaceBuilder::new(device.to_owned())
-                .ethernet_addr(ethernet_addr.to_owned())
-                .neighbor_cache(neighbor_cache.to_owned())
-                .ip_addrs(&mut ip_addrs.to_owned()[..])
-                .routes(routes.to_owned())
-                .finalize()
+            iface: iface
         }
     }
 
