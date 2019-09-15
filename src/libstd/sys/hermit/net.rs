@@ -9,7 +9,6 @@ use crate::io::{self, IoSlice, IoSliceMut};
 use crate::net::{SocketAddr, Shutdown, Ipv4Addr, Ipv6Addr};
 use crate::{ptr,str};
 use crate::panic;
-use crate::sync::Mutex;
 use crate::sys::hermit::thread::Tid;
 use crate::sys::{unsupported, Void};
 use crate::time::{self,Duration};
@@ -17,7 +16,7 @@ use crate::time::{self,Duration};
 #[allow(unused_extern_crates)]
 pub extern crate smoltcp;
 
-use smoltcp::iface::{EthernetInterfaceBuilder, EthernetInterface, NeighborCache, Routes};
+use smoltcp::iface::{EthernetInterfaceBuilder, NeighborCache, Routes};
 use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::socket::SocketSet;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
@@ -34,104 +33,6 @@ extern "C" {
 
 const MAX_MSG_SIZE: usize = 1792;
 const MAX_SOCKETS: usize = 32;
-
-static NETWORKD: Option<Mutex<NetworkD<'_, '_, '_>>> = None;
-
-struct NetworkD<'b, 'c, 'e> {
-    ip: [u8; 4],
-    gateway: [u8; 4],
-    mac: [u8; 18],
-    sem: *const c_void,
-    iface: EthernetInterface<'b, 'c, 'e, DeviceNet>
-}
-
-impl<'b, 'c, 'e> NetworkD<'b, 'c, 'e> {
-    pub fn new() -> Self {
-        let mut ip: [u8; 4] = [0; 4];
-        let mut gateway: [u8; 4] = [0; 4];
-        let mut mac: [u8; 18] = [0; 18];
-        let mut sem: *const c_void = ptr::null();
-
-        let ret = unsafe { sys_sem_init(&mut sem as *mut *const c_void, 0) };
-        if ret != 0 {
-            panic!("Unable to initialize semaphore");
-        }
-
-        let ret = unsafe { sys_network_init(sem, &mut ip, &mut gateway, &mut mac) };
-        if ret != 0 {
-            panic!("Unable to initialize network");
-        }
-
-        let mut neighbor_cache_entries = Box::new([None; 8]);
-        let mut neighbor_cache = NeighborCache::new(&mut neighbor_cache_entries[..]);
-        let mac_str = str::from_utf8(&mac).unwrap();
-        let ethernet_addr = EthernetAddress([
-            u8::from_str_radix(&mac_str[0..2], 16).unwrap(),
-            u8::from_str_radix(&mac_str[3..5], 16).unwrap(),
-            u8::from_str_radix(&mac_str[6..8], 16).unwrap(),
-            u8::from_str_radix(&mac_str[9..11], 16).unwrap(),
-            u8::from_str_radix(&mac_str[12..14], 16).unwrap(),
-            u8::from_str_radix(&mac_str[15..17], 16).unwrap(),
-        ]);
-        let mut ip_addrs = Box::new([IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), 24)]);
-        let default_gw = Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]);
-        let routes_storage = Box::new([None; 1]);
-        let mut routes = Routes::new(&mut routes_storage[..]);
-        routes.add_default_ipv4_route(default_gw).unwrap();
-        let device = DeviceNet::new();
-        let iface = EthernetInterfaceBuilder::new(device)
-                .ethernet_addr(ethernet_addr)
-                .neighbor_cache(neighbor_cache)
-                .ip_addrs(&mut ip_addrs[..])
-                .routes(routes)
-                .finalize();
-
-        NetworkD {
-            ip: ip,
-            gateway: gateway,
-            mac: mac,
-            sem: sem,
-            iface: iface
-        }
-    }
-
-    pub fn get_sem(&self) -> *const c_void {
-        self.sem
-    }
-
-    pub fn poll(&mut self) -> u32 {
-        let mut socket_set_entries: [_; MAX_SOCKETS] = Default::default();
-        let mut socket_set = SocketSet::new(&mut socket_set_entries[..]);
-        let start = time::SystemTime::now();
-
-        loop {
-            let timestamp = time::SystemTime::now().duration_since(start).unwrap();
-            let timestamp_ms = (timestamp.as_secs() * 1_000) as i64 + timestamp.subsec_millis() as i64;
-
-            match self.iface.poll(&mut socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
-                Ok(_) => {},
-                Err(_) => {}
-            }
-
-            if unsafe{ !sys_is_polling() } {
-                match self.iface.poll_delay(&socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
-                    Some(duration) => {
-                        // Calculate the maximum sleep time in milliseconds.
-                        let delay = duration.total_millis();
-                        if delay > 0 {
-                            return delay as u32;
-                        } else {
-                            let _ = unsafe { sys_sem_trywait(self.sem) };
-                        }
-                    },
-                    None => {
-                        return 0;
-                    },
-                };
-            }
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct DeviceNet {
@@ -248,21 +149,79 @@ impl phy::TxToken for TxToken {
 }
 
 extern "C" fn networkd(_: usize) {
-    let sem = NETWORKD.as_ref().unwrap().lock().unwrap().get_sem();
+    let mut ip: [u8; 4] = [0; 4];
+    let mut gateway: [u8; 4] = [0; 4];
+    let mut mac: [u8; 18] = [0; 18];
+    let mut sem: *const c_void = ptr::null();
+
+    let ret = unsafe { sys_sem_init(&mut sem as *mut *const c_void, 0) };
+    if ret != 0 {
+        panic!("Unable to initialize semaphore");
+    }
+
+    let ret = unsafe { sys_network_init(sem, &mut ip, &mut gateway, &mut mac) };
+    if ret != 0 {
+        panic!("Unable to initialize network");
+    }
+
+    let mut neighbor_cache_entries = [None; 8];
+    let mut neighbor_cache = NeighborCache::new(&mut neighbor_cache_entries[..]);
+    let mac_str = str::from_utf8(&mac).unwrap();
+    let ethernet_addr = EthernetAddress([
+        u8::from_str_radix(&mac_str[0..2], 16).unwrap(),
+        u8::from_str_radix(&mac_str[3..5], 16).unwrap(),
+        u8::from_str_radix(&mac_str[6..8], 16).unwrap(),
+        u8::from_str_radix(&mac_str[9..11], 16).unwrap(),
+        u8::from_str_radix(&mac_str[12..14], 16).unwrap(),
+        u8::from_str_radix(&mac_str[15..17], 16).unwrap(),
+    ]);
+    let mut ip_addrs = [IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), 24)];
+    let default_gw = Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]);
+    let mut routes_storage = [None; 1];
+    let mut routes = Routes::new(&mut routes_storage[..]);
+    routes.add_default_ipv4_route(default_gw).unwrap();
+    let device = DeviceNet::new();
+    let mut iface = EthernetInterfaceBuilder::new(device)
+        .ethernet_addr(ethernet_addr)
+        .neighbor_cache(neighbor_cache)
+        .ip_addrs(&mut ip_addrs[..])
+        .routes(routes)
+        .finalize();
+
+    let mut socket_set_entries: [_; MAX_SOCKETS] = Default::default();
+    let mut socket_set = SocketSet::new(&mut socket_set_entries[..]);
+    let start = time::SystemTime::now();
 
     loop {
-        let delay = {
-            NETWORKD.as_ref().unwrap().lock().unwrap().poll()
-        };
+        let timestamp = time::SystemTime::now().duration_since(start).unwrap();
+        let timestamp_ms = (timestamp.as_secs() * 1_000) as i64 + timestamp.subsec_millis() as i64;
 
-        let _ = unsafe { sys_sem_timedwait(sem, delay) };
+        match iface.poll(&mut socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
+            Ok(_) => {},
+            Err(_) => {}
+        }
+
+        if unsafe{ !sys_is_polling() } {
+            match iface.poll_delay(&socket_set, smoltcp::time::Instant::from_millis(timestamp_ms)) {
+                Some(duration) => {
+                    // Calculate the maximum sleep time in milliseconds.
+                    let delay = duration.total_millis();
+                    if delay > 0 {
+                        let _ = unsafe { sys_sem_timedwait(sem, delay as u32) };
+                    } else {
+                        let _ = unsafe { sys_sem_trywait(sem) };
+                    }
+                },
+                None => {
+                    let _ = unsafe { sys_sem_timedwait(sem, 0) };
+                },
+            };
+        }
     }
 }
 
 // Iinitializes HermitCore's network stack
 pub unsafe fn init() -> io::Result<()> {
-    NETWORKD = Some(Mutex::new(NetworkD::new()));
-
     // create thread to handle IP packets
     let mut tid: Tid = 0;
     let ret = sys_spawn(&mut tid as *mut Tid,
