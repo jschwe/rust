@@ -142,12 +142,15 @@ impl ModuleConfig {
         // Copy what clang does by turning on loop vectorization at O2 and
         // slp vectorization at O3. Otherwise configure other optimization aspects
         // of this pass manager builder.
+        // Turn off vectorization for emscripten, as it's not very well supported.
         self.vectorize_loop = !sess.opts.cg.no_vectorize_loops &&
                              (sess.opts.optimize == config::OptLevel::Default ||
-                              sess.opts.optimize == config::OptLevel::Aggressive);
+                              sess.opts.optimize == config::OptLevel::Aggressive) &&
+                             !sess.target.target.options.is_like_emscripten;
 
         self.vectorize_slp = !sess.opts.cg.no_vectorize_slp &&
-                            sess.opts.optimize == config::OptLevel::Aggressive;
+                            sess.opts.optimize == config::OptLevel::Aggressive &&
+                            !sess.target.target.options.is_like_emscripten;
 
         // Some targets (namely, NVPTX) interact badly with the MergeFunctions
         // pass. This is because MergeFunctions can generate new function calls
@@ -320,8 +323,6 @@ pub fn start_async_codegen<B: ExtraBackendMethods>(
 ) -> OngoingCodegen<B> {
     let (coordinator_send, coordinator_receive) = channel();
     let sess = tcx.sess;
-
-    sess.prof.generic_activity_start("codegen_and_optimize_crate");
 
     let crate_name = tcx.crate_name(LOCAL_CRATE);
     let crate_hash = tcx.crate_hash(LOCAL_CRATE);
@@ -1773,8 +1774,6 @@ impl<B: ExtraBackendMethods> OngoingCodegen<B> {
         if sess.codegen_units() == 1 && sess.time_llvm_passes() {
             self.backend.print_pass_timings()
         }
-
-        sess.prof.generic_activity_end("codegen_and_optimize_crate");
 
         (CodegenResults {
             crate_name: self.crate_name,

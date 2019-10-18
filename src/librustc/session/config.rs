@@ -1316,10 +1316,6 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "dump the dependency graph to $RUST_DEP_GRAPH (default: /tmp/dep_graph.gv)"),
     query_dep_graph: bool = (false, parse_bool, [UNTRACKED],
         "enable queries of the dependency graph for regression testing"),
-    profile_queries: bool = (false, parse_bool, [UNTRACKED],
-        "trace and profile the queries of the incremental compilation framework"),
-    profile_queries_and_keys: bool = (false, parse_bool, [UNTRACKED],
-        "trace and profile the queries and keys of the incremental compilation framework"),
     no_analysis: bool = (false, parse_bool, [UNTRACKED],
         "parse and expand the source, but run no analysis"),
     extra_plugins: Vec<String> = (Vec::new(), parse_list, [TRACKED],
@@ -1345,7 +1341,7 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
     mir_opt_level: usize = (1, parse_uint, [TRACKED],
         "set the MIR optimization level (0-3, default: 1)"),
     mutable_noalias: Option<bool> = (None, parse_opt_bool, [TRACKED],
-        "emit noalias metadata for mutable references (default: yes on LLVM >= 6)"),
+        "emit noalias metadata for mutable references (default: no)"),
     dump_mir: Option<String> = (None, parse_opt_string, [UNTRACKED],
         "dump MIR state to file.
         `val` is used to select which passes and functions to dump. For example:
@@ -1471,6 +1467,9 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "which mangling version to use for symbol names"),
     binary_dep_depinfo: bool = (false, parse_bool, [TRACKED],
         "include artifacts (sysroot, crate dependencies) used during compilation in dep-info"),
+    insert_sideeffect: bool = (false, parse_bool, [TRACKED],
+        "fix undefined behavior when a thread doesn't eventually make progress \
+         (such as entering an empty infinite loop) by inserting llvm.sideeffect"),
 }
 
 pub fn default_lib_output() -> CrateType {

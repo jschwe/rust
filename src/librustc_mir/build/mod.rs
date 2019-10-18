@@ -146,7 +146,7 @@ pub fn mir_build(tcx: TyCtxt<'_>, def_id: DefId) -> Body<'_> {
             let (yield_ty, return_ty) = if body.generator_kind.is_some() {
                 let gen_sig = match ty.kind {
                     ty::Generator(gen_def_id, gen_substs, ..) =>
-                        gen_substs.sig(gen_def_id, tcx),
+                        gen_substs.as_generator().sig(gen_def_id, tcx),
                     _ =>
                         span_bug!(tcx.hir().span(id),
                                   "generator w/o generator type: {:?}", ty),
@@ -829,12 +829,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             // Function arguments always get the first Local indices after the return place
             let local = Local::new(index + 1);
             let place = Place::from(local);
-            let &ArgInfo(ty, opt_ty_info, arg_opt, ref self_binding) = arg_info;
+            let &ArgInfo(_, opt_ty_info, arg_opt, ref self_binding) = arg_info;
 
             // Make sure we drop (parts of) the argument even when not matched on.
             self.schedule_drop(
                 arg_opt.as_ref().map_or(ast_body.span, |arg| arg.pat.span),
-                argument_scope, local, ty, DropKind::Value,
+                argument_scope, local, DropKind::Value,
             );
 
             if let Some(arg) = arg_opt {

@@ -497,7 +497,8 @@ impl<'a> LateResolutionVisitor<'a, '_> {
                         Res::Def(DefKind::Struct, did) | Res::Def(DefKind::Union, did)
                                 if resolution.unresolved_segments() == 0 => {
                             if let Some(field_names) = self.r.field_names.get(&did) {
-                                if field_names.iter().any(|&field_name| ident.name == field_name) {
+                                if field_names.iter()
+                                        .any(|&field_name| ident.name == field_name.node) {
                                     return Some(AssocSuggestion::Field);
                                 }
                             }
@@ -728,7 +729,7 @@ impl<'a> LateResolutionVisitor<'a, '_> {
             // abort if the module is already found
             if result.is_some() { break; }
 
-            in_module.for_each_child_stable(self.r, |_, ident, _, name_binding| {
+            in_module.for_each_child(self.r, |_, ident, _, name_binding| {
                 // abort if the module is already found or if name_binding is private external
                 if result.is_some() || !name_binding.vis.is_visible_locally() {
                     return
@@ -760,7 +761,7 @@ impl<'a> LateResolutionVisitor<'a, '_> {
     fn collect_enum_variants(&mut self, def_id: DefId) -> Option<Vec<Path>> {
         self.find_module(def_id).map(|(enum_module, enum_import_suggestion)| {
             let mut variants = Vec::new();
-            enum_module.for_each_child_stable(self.r, |_, ident, _, name_binding| {
+            enum_module.for_each_child(self.r, |_, ident, _, name_binding| {
                 if let Res::Def(DefKind::Variant, _) = name_binding.res() {
                     let mut segms = enum_import_suggestion.path.segments.clone();
                     segms.push(ast::PathSegment::from_ident(ident));

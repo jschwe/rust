@@ -9,10 +9,8 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
 
-#![feature(inner_deref)]
 #![feature(crate_visibility_modifier)]
 #![feature(label_break_value)]
-#![feature(mem_take)]
 #![feature(nll)]
 
 #![recursion_limit="256"]
@@ -30,7 +28,7 @@ use rustc::hir::def::{self, DefKind, PartialRes, CtorKind, CtorOf, NonMacroAttrK
 use rustc::hir::def::Namespace::*;
 use rustc::hir::def_id::{CRATE_DEF_INDEX, LOCAL_CRATE, DefId};
 use rustc::hir::{TraitMap, GlobMap};
-use rustc::ty;
+use rustc::ty::{self, DefIdTree};
 use rustc::util::nodemap::{NodeMap, NodeSet, FxHashMap, FxHashSet, DefIdMap};
 use rustc::span_bug;
 
@@ -47,6 +45,7 @@ use syntax::attr;
 use syntax::ast::{CRATE_NODE_ID, Crate};
 use syntax::ast::{ItemKind, Path};
 use syntax::{struct_span_err, unwrap_or};
+use syntax::source_map::Spanned;
 
 use syntax_pos::{Span, DUMMY_SP};
 use errors::{Applicability, DiagnosticBuilder};
@@ -58,10 +57,11 @@ use std::{cmp, fmt, iter, ptr};
 use std::collections::BTreeSet;
 use rustc_data_structures::ptr_key::PtrKey;
 use rustc_data_structures::sync::Lrc;
+use rustc_data_structures::fx::FxIndexMap;
 
 use diagnostics::{Suggestion, ImportSuggestion};
 use diagnostics::{find_span_of_binding_until_next_binding, extend_span_to_previous_binding};
-use late::{PathSource, Rib, RibKind::*};
+use late::{HasGenericParams, PathSource, Rib, RibKind::*};
 use resolve_imports::{ImportDirective, ImportDirectiveSubclass, NameResolution, ImportResolver};
 use macros::{LegacyBinding, LegacyScope};
 
@@ -178,7 +178,7 @@ impl Ord for BindingError {
 
 enum ResolutionError<'a> {
     /// Error E0401: can't use type or const parameters from outer function.
-    GenericParamsFromOuterFunction(Res),
+    GenericParamsFromOuterFunction(Res, HasGenericParams),
     /// Error E0403: the name is already used for a type or const parameter in this generic
     /// parameter list.
     NameAlreadyUsedInParameterList(Name, Span),
@@ -431,7 +431,7 @@ impl ModuleKind {
     }
 }
 
-type Resolutions<'a> = RefCell<FxHashMap<(Ident, Namespace), &'a RefCell<NameResolution<'a>>>>;
+type Resolutions<'a> = RefCell<FxIndexMap<(Ident, Namespace), &'a RefCell<NameResolution<'a>>>>;
 
 /// One node in the tree of modules.
 pub struct ModuleData<'a> {
@@ -493,17 +493,6 @@ impl<'a> ModuleData<'a> {
     {
         for (&(ident, ns), name_resolution) in resolver.as_mut().resolutions(self).borrow().iter() {
             name_resolution.borrow().binding.map(|binding| f(resolver, ident, ns, binding));
-        }
-    }
-
-    fn for_each_child_stable<R, F>(&'a self, resolver: &mut R, mut f: F)
-        where R: AsMut<Resolver<'a>>, F: FnMut(&mut R, Ident, Namespace, &'a NameBinding<'a>)
-    {
-        let resolutions = resolver.as_mut().resolutions(self).borrow();
-        let mut resolutions = resolutions.iter().collect::<Vec<_>>();
-        resolutions.sort_by_cached_key(|&(&(ident, ns), _)| (ident.as_str(), ns));
-        for &(&(ident, ns), &resolution) in resolutions.iter() {
-            resolution.borrow().binding.map(|binding| f(resolver, ident, ns, binding));
         }
     }
 
@@ -840,7 +829,7 @@ pub struct Resolver<'a> {
 
     /// Names of fields of an item `DefId` accessible with dot syntax.
     /// Used for hints during error reporting.
-    field_names: FxHashMap<DefId, Vec<Name>>,
+    field_names: FxHashMap<DefId, Vec<Spanned<Name>>>,
 
     /// All imports known to succeed or fail.
     determined_imports: Vec<&'a ImportDirective<'a>>,
@@ -1005,7 +994,7 @@ impl<'a> AsMut<Resolver<'a>> for Resolver<'a> {
     fn as_mut(&mut self) -> &mut Resolver<'a> { self }
 }
 
-impl<'a, 'b> ty::DefIdTree for &'a Resolver<'b> {
+impl<'a, 'b> DefIdTree for &'a Resolver<'b> {
     fn parent(self, id: DefId) -> Option<DefId> {
         match id.krate {
             LOCAL_CRATE => self.definitions.def_key(id.index).parent,
@@ -1266,6 +1255,9 @@ impl<'a> Resolver<'a> {
 
     /// Entry point to crate resolution.
     pub fn resolve_crate(&mut self, krate: &Crate) {
+        let _prof_timer =
+            self.session.prof.generic_activity("resolve_crate");
+
         ImportResolver { r: self }.finalize_imports();
         self.finalize_macro_resolutions();
 
@@ -2167,7 +2159,7 @@ impl<'a> Resolver<'a> {
                         ForwardTyParamBanRibKind | TyParamAsConstParamTy => {
                             // Nothing to do. Continue.
                         }
-                        ItemRibKind | FnItemRibKind | AssocItemRibKind => {
+                        ItemRibKind(_) | FnItemRibKind | AssocItemRibKind => {
                             // This was an attempt to access an upvar inside a
                             // named function item. This is not allowed, so we
                             // report an error.
@@ -2195,22 +2187,23 @@ impl<'a> Resolver<'a> {
             }
             Res::Def(DefKind::TyParam, _) | Res::SelfTy(..) => {
                 for rib in ribs {
-                    match rib.kind {
+                    let has_generic_params = match rib.kind {
                         NormalRibKind | AssocItemRibKind |
                         ModuleRibKind(..) | MacroDefinition(..) | ForwardTyParamBanRibKind |
                         ConstantItemRibKind | TyParamAsConstParamTy => {
                             // Nothing to do. Continue.
+                            continue;
                         }
-                        ItemRibKind | FnItemRibKind => {
-                            // This was an attempt to use a type parameter outside its scope.
-                            if record_used {
-                                self.report_error(
-                                    span, ResolutionError::GenericParamsFromOuterFunction(res)
-                                );
-                            }
-                            return Res::Err;
-                        }
+                        // This was an attempt to use a type parameter outside its scope.
+                        ItemRibKind(has_generic_params) => has_generic_params,
+                        FnItemRibKind => HasGenericParams::Yes,
+                    };
+
+                    if record_used {
+                        self.report_error(span, ResolutionError::GenericParamsFromOuterFunction(
+                            res, has_generic_params));
                     }
+                    return Res::Err;
                 }
             }
             Res::Def(DefKind::ConstParam, _) => {
@@ -2222,15 +2215,18 @@ impl<'a> Resolver<'a> {
                     ribs.next();
                 }
                 for rib in ribs {
-                    if let ItemRibKind | FnItemRibKind = rib.kind {
-                        // This was an attempt to use a const parameter outside its scope.
-                        if record_used {
-                            self.report_error(
-                                span, ResolutionError::GenericParamsFromOuterFunction(res)
-                            );
-                        }
-                        return Res::Err;
+                    let has_generic_params = match rib.kind {
+                        ItemRibKind(has_generic_params) => has_generic_params,
+                        FnItemRibKind => HasGenericParams::Yes,
+                        _ => continue,
+                    };
+
+                    // This was an attempt to use a const parameter outside its scope.
+                    if record_used {
+                        self.report_error(span, ResolutionError::GenericParamsFromOuterFunction(
+                            res, has_generic_params));
                     }
+                    return Res::Err;
                 }
             }
             _ => {}
@@ -2390,23 +2386,17 @@ impl<'a> Resolver<'a> {
                     binding.res().descr(),
                     ident.name,
                 );
-                // FIXME: use the ctor's `def_id` to check wether any of the fields is not visible
-                match binding.kind {
-                    NameBindingKind::Res(Res::Def(DefKind::Ctor(
-                        CtorOf::Struct,
-                        CtorKind::Fn,
-                    ), _def_id), _) => {
-                        err.note("a tuple struct constructor is private if any of its fields \
-                                  is private");
+                if let NameBindingKind::Res(
+                    Res::Def(DefKind::Ctor(CtorOf::Struct, CtorKind::Fn), ctor_def_id), _
+                ) = binding.kind {
+                    let def_id = (&*self).parent(ctor_def_id).expect("no parent for a constructor");
+                    if let Some(fields) = self.field_names.get(&def_id) {
+                        let first_field = fields.first().expect("empty field list in the map");
+                        err.span_label(
+                            fields.iter().fold(first_field.span, |acc, field| acc.to(field.span)),
+                            "a tuple struct constructor is private if any of its fields is private",
+                        );
                     }
-                    NameBindingKind::Res(Res::Def(DefKind::Ctor(
-                        CtorOf::Variant,
-                        CtorKind::Fn,
-                    ), _def_id), _) => {
-                        err.note("a tuple variant constructor is private if any of its fields \
-                                  is private");
-                    }
-                    _ => {}
                 }
                 err.emit();
             }

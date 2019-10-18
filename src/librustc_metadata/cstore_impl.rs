@@ -33,6 +33,7 @@ use syntax::source_map;
 use syntax::edition::Edition;
 use syntax::parse::source_file_to_stream;
 use syntax::parse::parser::emit_unclosed_delims;
+use syntax::source_map::Spanned;
 use syntax::symbol::Symbol;
 use syntax_pos::{Span, FileName};
 use rustc_index::bit_set::BitSet;
@@ -270,7 +271,11 @@ pub fn provide(providers: &mut Providers<'_>) {
     // resolve! Does this work? Unsure! That's what the issue is about
     *providers = Providers {
         is_dllimport_foreign_item: |tcx, id| {
-            tcx.native_library_kind(id) == Some(NativeLibraryKind::NativeUnknown)
+            match tcx.native_library_kind(id) {
+                Some(NativeLibraryKind::NativeUnknown) |
+                Some(NativeLibraryKind::NativeRawDylib) => true,
+                _ => false,
+            }
         },
         is_statically_included_foreign_item: |tcx, id| {
             match tcx.native_library_kind(id) {
@@ -420,8 +425,8 @@ impl cstore::CStore {
         self.get_crate_data(cnum).root.edition
     }
 
-    pub fn struct_field_names_untracked(&self, def: DefId) -> Vec<ast::Name> {
-        self.get_crate_data(def.krate).get_struct_field_names(def.index)
+    pub fn struct_field_names_untracked(&self, def: DefId, sess: &Session) -> Vec<Spanned<Symbol>> {
+        self.get_crate_data(def.krate).get_struct_field_names(def.index, sess)
     }
 
     pub fn ctor_kind_untracked(&self, def: DefId) -> def::CtorKind {

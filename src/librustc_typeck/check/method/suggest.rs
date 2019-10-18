@@ -461,16 +461,36 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     err.span_label(span, "this is an associated function, not a method");
                 }
                 if static_sources.len() == 1 {
-                    if let SelfSource::MethodCall(expr) = source {
-                        err.span_suggestion(expr.span.to(span),
-                                            "use associated function syntax instead",
-                                            format!("{}::{}",
-                                                    self.ty_to_string(actual),
-                                                    item_name),
-                                            Applicability::MachineApplicable);
+                    let ty_str = if let Some(CandidateSource::ImplSource(
+                        impl_did,
+                    )) = static_sources.get(0) {
+                        // When the "method" is resolved through dereferencing, we really want the
+                        // original type that has the associated function for accurate suggestions.
+                        // (#61411)
+                        let ty = self.impl_self_ty(span, *impl_did).ty;
+                        match (&ty.peel_refs().kind, &actual.peel_refs().kind) {
+                            (ty::Adt(def, _), ty::Adt(def_actual, _)) if def == def_actual => {
+                                // Use `actual` as it will have more `substs` filled in.
+                                self.ty_to_value_string(actual.peel_refs())
+                            }
+                            _ => self.ty_to_value_string(ty.peel_refs()),
+                        }
                     } else {
-                        err.help(&format!("try with `{}::{}`",
-                                          self.ty_to_string(actual), item_name));
+                        self.ty_to_value_string(actual.peel_refs())
+                    };
+                    if let SelfSource::MethodCall(expr) = source {
+                        err.span_suggestion(
+                            expr.span.to(span),
+                            "use associated function syntax instead",
+                            format!("{}::{}", ty_str, item_name),
+                            Applicability::MachineApplicable,
+                        );
+                    } else {
+                        err.help(&format!(
+                            "try with `{}::{}`",
+                            ty_str,
+                            item_name,
+                        ));
                     }
 
                     report_candidates(span, &mut err, static_sources);
@@ -518,7 +538,27 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
                 }
 
-                if let Some(lev_candidate) = lev_candidate {
+                let mut fallback_span = true;
+                let msg = "remove this method call";
+                if item_name.as_str() == "as_str" && actual.peel_refs().is_str() {
+                    if let SelfSource::MethodCall(expr) = source {
+                        let call_expr = self.tcx.hir().expect_expr(
+                            self.tcx.hir().get_parent_node(expr.hir_id),
+                        );
+                        if let Some(span) = call_expr.span.trim_start(expr.span) {
+                            err.span_suggestion(
+                                span,
+                                msg,
+                                String::new(),
+                                Applicability::MachineApplicable,
+                            );
+                            fallback_span = false;
+                        }
+                    }
+                    if fallback_span {
+                        err.span_label(span, msg);
+                    }
+                } else if let Some(lev_candidate) = lev_candidate {
                     let def_kind = lev_candidate.def_kind();
                     err.span_suggestion(
                         span,
@@ -553,21 +593,32 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 err.emit();
             }
 
-            MethodError::IllegalSizedBound(candidates) => {
+            MethodError::IllegalSizedBound(candidates, needs_mut) => {
                 let msg = format!("the `{}` method cannot be invoked on a trait object", item_name);
                 let mut err = self.sess().struct_span_err(span, &msg);
                 if !candidates.is_empty() {
-                    let help = format!("{an}other candidate{s} {were} found in the following \
-                                        trait{s}, perhaps add a `use` for {one_of_them}:",
-                                    an = if candidates.len() == 1 {"an" } else { "" },
-                                    s = pluralise!(candidates.len()),
-                                    were = if candidates.len() == 1 { "was" } else { "were" },
-                                    one_of_them = if candidates.len() == 1 {
-                                        "it"
-                                    } else {
-                                        "one_of_them"
-                                    });
+                    let help = format!(
+                        "{an}other candidate{s} {were} found in the following trait{s}, perhaps \
+                         add a `use` for {one_of_them}:",
+                        an = if candidates.len() == 1 {"an" } else { "" },
+                        s = pluralise!(candidates.len()),
+                        were = if candidates.len() == 1 { "was" } else { "were" },
+                        one_of_them = if candidates.len() == 1 {
+                            "it"
+                        } else {
+                            "one_of_them"
+                        },
+                    );
                     self.suggest_use_candidates(&mut err, help, candidates);
+                }
+                if let ty::Ref(region, t_type, mutability) = rcvr_ty.kind {
+                    if needs_mut {
+                        let trait_type = self.tcx.mk_ref(region, ty::TypeAndMut {
+                            ty: t_type,
+                            mutbl: mutability.invert(),
+                        });
+                        err.note(&format!("you need `{}` instead of `{}`", trait_type, rcvr_ty));
+                    }
                 }
                 err.emit();
             }
@@ -577,6 +628,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
         }
         None
+    }
+
+    /// Print out the type for use in value namespace.
+    fn ty_to_value_string(&self, ty: Ty<'tcx>) -> String {
+        match ty.kind {
+            ty::Adt(def, substs) => format!("{}", ty::Instance::new(def.did, substs)),
+            _ => self.ty_to_string(ty),
+        }
     }
 
     fn suggest_use_candidates(&self,

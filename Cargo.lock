@@ -108,6 +108,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "autocfg"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b671c8fb71b457dd4ae18c4ba1e59aa81793daacc361d82fcd410cef0d491875"
+
+[[package]]
 name = "backtrace"
 version = "0.3.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -660,6 +666,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b18cd2e169ad86297e6bc0ad9aa679aee9daa4f19e8163860faf7c164e4f5a71"
+dependencies = [
+ "crossbeam-epoch 0.7.2",
+ "crossbeam-utils 0.6.5",
+]
+
+[[package]]
 name = "crossbeam-epoch"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -993,7 +1009,7 @@ dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.12",
  "syn 0.15.35",
- "synstructure",
+ "synstructure 0.10.2",
 ]
 
 [[package]]
@@ -1259,7 +1275,7 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df044dd42cdb7e32f28557b661406fc0f2494be75199779998810dbc35030e0d"
 dependencies = [
- "hashbrown",
+ "hashbrown 0.5.0",
  "lazy_static 1.3.0",
  "log",
  "pest",
@@ -1276,10 +1292,19 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1de41fb8dba9714efd92241565cdff73f78508c95697dd56787d3cba27e2353"
 dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6587d09be37fb98a11cb08b9000a3f592451c1b1b613ca69d949160e313a430a"
+dependencies = [
+ "autocfg",
  "compiler_builtins",
  "rustc-std-workspace-alloc",
  "rustc-std-workspace-core",
- "serde",
 ]
 
 [[package]]
@@ -2791,22 +2816,22 @@ dependencies = [
 
 [[package]]
 name = "rayon"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4b0186e22767d5b9738a05eab7c6ac90b15db17e5b5f9bd87976dd7d89a10a4"
+checksum = "83a27732a533a1be0a0035a111fe76db89ad312f6f0347004c220c57f209a123"
 dependencies = [
- "crossbeam-deque 0.6.3",
+ "crossbeam-deque 0.7.1",
  "either",
  "rayon-core",
 ]
 
 [[package]]
 name = "rayon-core"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebbe0df8435ac0c397d467b6cad6d25543d06e8a019ef3f6af3c384597515bd2"
+checksum = "98dcf634205083b17d0861252431eb2acbfb698ab7478a2d20de07954f47ec7b"
 dependencies = [
- "crossbeam-deque 0.6.3",
+ "crossbeam-deque 0.7.1",
  "crossbeam-queue",
  "crossbeam-utils 0.6.5",
  "lazy_static 1.3.0",
@@ -3074,8 +3099,8 @@ dependencies = [
  "num_cpus",
  "parking_lot 0.9.0",
  "polonius-engine",
- "rustc-rayon",
- "rustc-rayon-core",
+ "rustc-rayon 0.3.0",
+ "rustc-rayon-core 0.3.0",
  "rustc_apfloat",
  "rustc_data_structures",
  "rustc_errors",
@@ -3123,8 +3148,8 @@ dependencies = [
  "rustc-ap-graphviz",
  "rustc-ap-serialize",
  "rustc-hash",
- "rustc-rayon",
- "rustc-rayon-core",
+ "rustc-rayon 0.2.0",
+ "rustc-rayon-core 0.2.0",
  "smallvec",
  "stable_deref_trait",
 ]
@@ -3165,7 +3190,7 @@ dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.12",
  "syn 0.15.35",
- "synstructure",
+ "synstructure 0.10.2",
 ]
 
 [[package]]
@@ -3263,7 +3288,18 @@ checksum = "0d2e07e19601f21c59aad953c2632172ba70cb27e685771514ea66e4062b3363"
 dependencies = [
  "crossbeam-deque 0.2.0",
  "either",
- "rustc-rayon-core",
+ "rustc-rayon-core 0.2.0",
+]
+
+[[package]]
+name = "rustc-rayon"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f32767f90d938f1b7199a174ef249ae1924f6e5bbdb9d112fea141e016f25b3a"
+dependencies = [
+ "crossbeam-deque 0.7.1",
+ "either",
+ "rustc-rayon-core 0.3.0",
 ]
 
 [[package]]
@@ -3275,6 +3311,19 @@ dependencies = [
  "crossbeam-deque 0.2.0",
  "lazy_static 1.3.0",
  "libc",
+ "num_cpus",
+]
+
+[[package]]
+name = "rustc-rayon-core"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea2427831f0053ea3ea73559c8eabd893133a51b251d142bacee53c62a288cb3"
+dependencies = [
+ "crossbeam-deque 0.7.1",
+ "crossbeam-queue",
+ "crossbeam-utils 0.6.5",
+ "lazy_static 1.3.0",
  "num_cpus",
 ]
 
@@ -3398,8 +3447,8 @@ dependencies = [
  "log",
  "parking_lot 0.9.0",
  "rustc-hash",
- "rustc-rayon",
- "rustc-rayon-core",
+ "rustc-rayon 0.3.0",
+ "rustc-rayon-core 0.3.0",
  "rustc_index",
  "serialize",
  "smallvec",
@@ -3479,7 +3528,7 @@ dependencies = [
  "log",
  "once_cell",
  "rustc",
- "rustc-rayon",
+ "rustc-rayon 0.3.0",
  "rustc_codegen_ssa",
  "rustc_codegen_utils",
  "rustc_data_structures",
@@ -3546,10 +3595,10 @@ name = "rustc_macros"
 version = "0.1.0"
 dependencies = [
  "itertools 0.8.0",
- "proc-macro2 0.4.30",
- "quote 0.6.12",
- "syn 0.15.35",
- "synstructure",
+ "proc-macro2 1.0.3",
+ "quote 1.0.2",
+ "syn 1.0.5",
+ "synstructure 0.12.1",
 ]
 
 [[package]]
@@ -3613,6 +3662,8 @@ dependencies = [
  "rustc",
  "rustc_data_structures",
  "rustc_errors",
+ "rustc_index",
+ "rustc_target",
  "syntax",
  "syntax_pos",
 ]
@@ -3756,7 +3807,7 @@ version = "0.0.0"
 dependencies = [
  "minifier",
  "pulldown-cmark 0.5.3",
- "rustc-rayon",
+ "rustc-rayon 0.3.0",
  "tempfile",
 ]
 
@@ -4073,7 +4124,7 @@ dependencies = [
  "core",
  "dlmalloc",
  "fortanix-sgx-abi",
- "hashbrown",
+ "hashbrown 0.6.1",
  "libc",
  "panic_abort",
  "panic_unwind",
@@ -4240,6 +4291,18 @@ dependencies = [
  "quote 0.6.12",
  "syn 0.15.35",
  "unicode-xid 0.1.0",
+]
+
+[[package]]
+name = "synstructure"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f085a5855930c0441ca1288cf044ea4aecf4f43a91668abdb870b4ba546a203"
+dependencies = [
+ "proc-macro2 1.0.3",
+ "quote 1.0.2",
+ "syn 1.0.5",
+ "unicode-xid 0.2.0",
 ]
 
 [[package]]

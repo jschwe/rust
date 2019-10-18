@@ -29,7 +29,7 @@ use crate::traits;
 use crate::traits::{Clause, Clauses, GoalKind, Goal, Goals};
 use crate::ty::{self, DefIdTree, Ty, TypeAndMut};
 use crate::ty::{TyS, TyKind, List};
-use crate::ty::{AdtKind, AdtDef, GeneratorSubsts, Region, Const};
+use crate::ty::{AdtKind, AdtDef, Region, Const};
 use crate::ty::{PolyFnSig, InferTy, ParamTy, ProjectionTy, ExistentialPredicate, Predicate};
 use crate::ty::RegionKind;
 use crate::ty::{TyVar, TyVid, IntVar, IntVid, FloatVar, FloatVid, ConstVid};
@@ -2510,7 +2510,7 @@ impl<'tcx> TyCtxt<'tcx> {
     #[inline]
     pub fn mk_generator(self,
                         id: DefId,
-                        generator_substs: GeneratorSubsts<'tcx>,
+                        generator_substs: SubstsRef<'tcx>,
                         movability: hir::GeneratorMovability)
                         -> Ty<'tcx> {
         self.mk_ty(Generator(id, generator_substs, movability))
@@ -2868,8 +2868,29 @@ impl<'a, T, R> InternIteratorElement<T, R> for &'a T
 
 impl<T, R, E> InternIteratorElement<T, R> for Result<T, E> {
     type Output = Result<R, E>;
-    fn intern_with<I: Iterator<Item=Self>, F: FnOnce(&[T]) -> R>(iter: I, f: F) -> Self::Output {
-        Ok(f(&iter.collect::<Result<SmallVec<[_; 8]>, _>>()?))
+    fn intern_with<I: Iterator<Item=Self>, F: FnOnce(&[T]) -> R>(mut iter: I, f: F)
+            -> Self::Output {
+        // This code is hot enough that it's worth specializing for the most
+        // common length lists, to avoid the overhead of `SmallVec` creation.
+        // The match arms are in order of frequency. The 1, 2, and 0 cases are
+        // typically hit in ~95% of cases. We assume that if the upper and
+        // lower bounds from `size_hint` agree they are correct.
+        Ok(match iter.size_hint() {
+            (1, Some(1)) => {
+                f(&[iter.next().unwrap()?])
+            }
+            (2, Some(2)) => {
+                let t0 = iter.next().unwrap()?;
+                let t1 = iter.next().unwrap()?;
+                f(&[t0, t1])
+            }
+            (0, Some(0)) => {
+                f(&[])
+            }
+            _ => {
+                f(&iter.collect::<Result<SmallVec<[_; 8]>, _>>()?)
+            }
+        })
     }
 }
 

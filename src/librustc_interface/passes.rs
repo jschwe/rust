@@ -250,6 +250,8 @@ pub fn register_plugins<'a>(
 
     if sess.opts.incremental.is_some() {
         time(sess, "garbage-collect incremental cache directory", || {
+            let _prof_timer =
+                sess.prof.generic_activity("incr_comp_garbage_collect_session_directories");
             if let Err(e) = rustc_incremental::garbage_collect_session_directories(sess) {
                 warn!(
                     "Error while trying to garbage collect incremental \
@@ -780,13 +782,10 @@ pub fn default_provide(providers: &mut ty::query::Providers<'_>) {
     ty::provide(providers);
     traits::provide(providers);
     stability::provide(providers);
-    middle::intrinsicck::provide(providers);
-    middle::liveness::provide(providers);
     reachable::provide(providers);
     rustc_passes::provide(providers);
     rustc_traits::provide(providers);
     middle::region::provide(providers);
-    middle::entry::provide(providers);
     cstore::provide(providers);
     lint::provide(providers);
     rustc_lint::provide(providers);
@@ -892,7 +891,7 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
     time(sess, "misc checking 1", || {
         parallel!({
             entry_point = time(sess, "looking for entry point", || {
-                middle::entry::find_entry_point(tcx)
+                rustc_passes::entry::find_entry_point(tcx)
             });
 
             time(sess, "looking for plugin registrar", || {
@@ -973,7 +972,7 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
                     tcx.ensure().check_private_in_public(LOCAL_CRATE);
                 });
             }, {
-                time(sess, "death checking", || middle::dead::check_crate(tcx));
+                time(sess, "death checking", || rustc_passes::dead::check_crate(tcx));
             },  {
                 time(sess, "unused lib feature checking", || {
                     stability::check_unused_or_stable_features(tcx)
