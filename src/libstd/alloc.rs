@@ -202,7 +202,7 @@ fn default_alloc_error_hook(layout: Layout) {
     dumb_print(format_args!("memory allocation of {} bytes failed", layout.size()));
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), not(target_os = "hermit")))]
 #[doc(hidden)]
 #[alloc_error_handler]
 #[unstable(feature = "alloc_internals", issue = "0")]

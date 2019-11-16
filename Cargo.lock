@@ -149,6 +149,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bit_field"
+version = "0.10.0"
+source = "git+https://github.com/hermitcore/rust-bit-field.git?branch=hermit#76a803090c0b836094582431c4318dee89ce2e41"
+dependencies = [
+ "compiler_builtins",
+ "rustc-std-workspace-core",
+]
+
+[[package]]
+name = "bitflags"
+version = "1.2.1"
+source = "git+https://github.com/hermitcore/bitflags.git?branch=hermit#8381fe363cf4ad74c4b81295b70b45f3abd70f78"
+dependencies = [
+ "compiler_builtins",
+ "rustc-std-workspace-core",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -305,7 +323,7 @@ dependencies = [
  "lazycell",
  "libc",
  "libgit2-sys",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "memchr",
  "miow 0.3.3",
  "num_cpus",
@@ -444,7 +462,7 @@ checksum = "5067f5bb2d80ef5d68b4c87db81601f0b75bca627bc2ef76b141d7b846a3c6d9"
 dependencies = [
  "ansi_term",
  "atty",
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "strsim",
  "textwrap",
  "unicode-width",
@@ -499,7 +517,7 @@ version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddfc5b9aa5d4507acaf872de71051dfd0e309860e88966e1051e462a077aac4f"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -557,7 +575,7 @@ dependencies = [
  "getopts",
  "lazy_static 1.3.0",
  "libc",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "miow 0.3.3",
  "regex",
  "rustfix",
@@ -577,7 +595,7 @@ dependencies = [
  "filetime",
  "getopts",
  "libc",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "miow 0.3.3",
  "regex",
  "rustfix",
@@ -948,7 +966,7 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8944dc8fa28ce4a38f778bd46bf7d923fe73eed5a439398507246c8e017e6f36"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -968,7 +986,7 @@ checksum = "aafcde04e90a5226a6443b7aabdb016ba2f8307c847d524724bd9b346dd1a2d3"
 dependencies = [
  "atty",
  "humantime",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
  "termcolor",
 ]
@@ -981,7 +999,7 @@ checksum = "44533bbbb3bb3c1fa17d9f2e4e38bbbaf8396ba82193c4cb1b6445d711445d36"
 dependencies = [
  "atty",
  "humantime",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
  "termcolor",
 ]
@@ -1137,7 +1155,7 @@ version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e9763c69ebaae630ba35f74888db465e49e259ba1bc0eda7d06f4a067615d82"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "fuchsia-zircon-sys",
 ]
 
@@ -1220,10 +1238,10 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "327d698f86a7ebdfeb86a4238ccdb004828939d3a3555b6ead679541d14e36c0"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc",
  "libgit2-sys",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "openssl-probe",
  "openssl-sys",
  "url 2.1.0",
@@ -1237,7 +1255,7 @@ checksum = "cd6527e480187ce19aaf4fa6acfb7657b25628ce31cb8ffabdfca3bf731524c5"
 dependencies = [
  "curl",
  "git2",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 2.1.0",
 ]
 
@@ -1256,7 +1274,7 @@ dependencies = [
  "aho-corasick",
  "bstr",
  "fnv",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
 ]
 
@@ -1276,7 +1294,7 @@ dependencies = [
  "futures",
  "http",
  "indexmap",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "slab",
  "string",
  "tokio-io",
@@ -1290,7 +1308,7 @@ checksum = "df044dd42cdb7e32f28557b661406fc0f2494be75199779998810dbc35030e0d"
 dependencies = [
  "hashbrown 0.5.0",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "pest",
  "pest_derive",
  "quick-error",
@@ -1331,13 +1349,13 @@ dependencies = [
 
 [[package]]
 name = "hermit-abi"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f22b8f315b98f415780ddbe9163c7dbbc5a07225b6d102ace1d8aeef85775140"
+version = "0.1.3"
+source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4ca1b51f6b06bb9a389ad87e5f831bd4c1cc27e8"
 dependencies = [
  "compiler_builtins",
  "libc",
  "rustc-std-workspace-core",
+ "rusty-hermit",
 ]
 
 [[package]]
@@ -1368,7 +1386,7 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "025483b0a1e4577bb28578318c886ee5f817dda6eb62473269349044406644cb"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mac",
  "markup5ever",
  "proc-macro2 1.0.3",
@@ -1429,7 +1447,7 @@ dependencies = [
  "httparse",
  "iovec",
  "itoa",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "net2",
  "rustc_version",
  "time",
@@ -1500,7 +1518,7 @@ dependencies = [
  "crossbeam-channel",
  "globset",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "memchr",
  "regex",
  "same-file",
@@ -1601,7 +1619,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f74e73053eaf95399bf926e48fc7a2a3ce50bd0eaaa2357d391e95b2dcdd4f10"
 dependencies = [
  "libc",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.0",
 ]
 
@@ -1622,7 +1640,7 @@ dependencies = [
  "jsonrpc-core",
  "jsonrpc-pubsub",
  "jsonrpc-server-utils",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "parity-tokio-ipc",
  "serde",
  "serde_json",
@@ -1637,7 +1655,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91d767c183a7e58618a609499d359ce3820700b3ebb4823a18c343b4a2a41a0d"
 dependencies = [
  "futures",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_derive",
  "serde_json",
@@ -1672,7 +1690,7 @@ checksum = "256c5e4292c17b4c2ecdf542299dc8e9d6b3939c075c54825570ad9317fe5751"
 dependencies = [
  "jsonrpc-core",
  "jsonrpc-server-utils",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "parity-tokio-ipc",
  "parking_lot 0.9.0",
  "tokio-service",
@@ -1685,7 +1703,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2c08b444cc0ed70263798834343d0ac875e664257df8079160f23ac1ea79446"
 dependencies = [
  "jsonrpc-core",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "parking_lot 0.9.0",
  "serde",
 ]
@@ -1700,7 +1718,7 @@ dependencies = [
  "globset",
  "jsonrpc-core",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "num_cpus",
  "tokio",
  "tokio-codec",
@@ -1833,6 +1851,16 @@ dependencies = [
 [[package]]
 name = "log"
 version = "0.4.8"
+source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4ca1b51f6b06bb9a389ad87e5f831bd4c1cc27e8"
+dependencies = [
+ "cfg-if",
+ "compiler_builtins",
+ "rustc-std-workspace-core",
+]
+
+[[package]]
+name = "log"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14b6052be84e6b71ab17edffc2eeabf5c2c3ae1fdb464aae35ac50c67a44e1f7"
 dependencies = [
@@ -1865,7 +1893,7 @@ version = "0.60.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe3edefcd66dde1f7f1df706f46520a3c93adc5ca4bc5747da6621195e894efd"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "serde_repr",
@@ -1907,7 +1935,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65381d9d47506b8592b97c4efd936afcf673b09b059f2bef39c7211ee78b9d03"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "phf",
  "phf_codegen",
  "serde",
@@ -1939,7 +1967,7 @@ dependencies = [
  "handlebars",
  "itertools 0.8.0",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "memchr",
  "open",
  "pulldown-cmark 0.5.3",
@@ -1961,7 +1989,7 @@ checksum = "77d1f0ba4d1e6b86fa18e8853d026d7d76a97eb7eb5eb052ed80901e43b7fc10"
 dependencies = [
  "env_logger 0.6.2",
  "failure",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mdbook",
  "memchr",
  "pulldown-cmark 0.5.3",
@@ -2091,7 +2119,7 @@ dependencies = [
  "kernel32-sys",
  "lazycell",
  "libc",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "miow 0.2.1",
  "net2",
  "slab",
@@ -2104,7 +2132,7 @@ version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5e374eff525ce1c5b7687c4cef63943e7686524a387933ad27ca7ec43779cb3"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio",
  "miow 0.3.3",
  "winapi 0.3.6",
@@ -2155,13 +2183,22 @@ dependencies = [
  "env_logger 0.7.1",
  "getrandom",
  "hex 0.4.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-traits",
  "rand 0.7.0",
  "rustc-workspace-hack",
  "rustc_version",
  "shell-escape",
  "vergen",
+]
+
+[[package]]
+name = "multiboot"
+version = "0.5.0"
+source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4ca1b51f6b06bb9a389ad87e5f831bd4c1cc27e8"
+dependencies = [
+ "compiler_builtins",
+ "rustc-std-workspace-core",
 ]
 
 [[package]]
@@ -2172,7 +2209,7 @@ checksum = "4b2df1a4c22fd44a62147fd8f13dd0f95c9d8ca7b2610299b2a2f9cf8964274e"
 dependencies = [
  "lazy_static 1.3.0",
  "libc",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "openssl",
  "openssl-probe",
  "openssl-sys",
@@ -2256,7 +2293,7 @@ version = "0.10.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f372b2b53ce10fb823a337aaa674e3a7d072b957c6264d0f4ff0bd86e657449"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "cfg-if",
  "foreign-types",
  "lazy_static 1.3.0",
@@ -2352,7 +2389,7 @@ checksum = "8281bf4f1d6429573f89589bf68d89451c46750977a8264f8ea3edbabeba7947"
 dependencies = [
  "bytes",
  "futures",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio-named-pipes",
  "miow 0.3.3",
  "rand 0.7.0",
@@ -2528,7 +2565,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50fa9dbfd0d3d60594da338cfe6f94028433eecae4b11b7e83fd99759227bbfe"
 dependencies = [
  "datafrog",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-hash",
 ]
 
@@ -2562,7 +2599,7 @@ checksum = "df8b3f4e0475def7d9c2e5de8e5a1306949849761e107b360d03e98eafaffd61"
 dependencies = [
  "chrono",
  "env_logger 0.6.2",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2625,7 +2662,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77043da1282374688ee212dc44b3f37ff929431de9c9adc3053bd3cee5630357"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts",
  "memchr",
  "unicase 2.5.1",
@@ -2637,7 +2674,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85b0ad0d4c1702965ee6bb5b4ff5e71f83850b497d497e9444302987bf9e26a4"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts",
  "memchr",
  "unicase 2.5.1",
@@ -2685,13 +2722,13 @@ version = "2.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acc70369054bad4ad0c16a3f45cd73e0695361a3af35c7b465e619ac2674f064"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap",
  "derive_more",
  "env_logger 0.6.2",
  "humantime",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rls-span",
  "rustc-ap-syntax",
 ]
@@ -2839,6 +2876,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "raw-cpuid"
+version = "7.0.3"
+source = "git+https://github.com/hermitcore/rust-cpuid.git?branch=hermit#8e24f4d90117517bd793d27d3e203d0969661747"
+dependencies = [
+ "bitflags 1.2.1 (git+https://github.com/hermitcore/bitflags.git?branch=hermit)",
+ "cc",
+ "compiler_builtins",
+ "rustc-std-workspace-core",
+ "rustc_version",
+]
+
+[[package]]
 name = "rayon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2951,7 +3000,7 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "libflate",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mime",
  "mime_guess",
  "native-tls",
@@ -2990,7 +3039,7 @@ dependencies = [
  "itertools 0.8.0",
  "jsonrpc-core",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "lsp-codec",
  "lsp-types",
  "num_cpus",
@@ -3031,7 +3080,7 @@ dependencies = [
  "fst",
  "itertools 0.7.8",
  "json",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rls-data",
  "rls-span",
  "serde",
@@ -3068,7 +3117,7 @@ dependencies = [
  "env_logger 0.7.1",
  "failure",
  "futures",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.0",
  "rls-data",
  "rls-ipc",
@@ -3091,7 +3140,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce4b57b25b4330ed5ec14028fc02141e083ddafda327e7eb598dc0569c8c83c9"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rls-span",
 ]
 
@@ -3112,14 +3161,14 @@ version = "0.0.0"
 dependencies = [
  "arena",
  "backtrace",
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder",
  "cc",
  "chalk-engine",
  "fmt_macros",
  "graphviz",
  "jobserver",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "measureme",
  "num_cpus",
  "parking_lot 0.9.0",
@@ -3168,7 +3217,7 @@ dependencies = [
  "indexmap",
  "jobserver",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "parking_lot 0.9.0",
  "rustc-ap-graphviz",
  "rustc-ap-rustc_index",
@@ -3188,7 +3237,7 @@ checksum = "a6967a41ed38ef4bce0f559fe9a4801d8ba12ac032f40a12a55e72f79d52c9bb"
 dependencies = [
  "annotate-snippets",
  "atty",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-ap-rustc_data_structures",
  "rustc-ap-serialize",
  "rustc-ap-syntax_pos",
@@ -3235,8 +3284,8 @@ version = "606.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86ca895350b0de14d064b499168c93fa183958d5462eb042c927d93623e41ec1"
 dependencies = [
- "bitflags",
- "log",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-ap-rustc_data_structures",
  "rustc-ap-rustc_index",
  "rustc-ap-serialize",
@@ -3259,9 +3308,9 @@ version = "606.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0a0c30f8e38c847dbfd9e2f1e472ab06d0bd0a23ab53ae4c5a44912842ce834e"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-ap-rustc_data_structures",
  "rustc-ap-rustc_errors",
  "rustc-ap-rustc_index",
@@ -3403,7 +3452,7 @@ dependencies = [
 name = "rustc_apfloat"
 version = "0.0.0"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "smallvec 1.0.0",
 ]
 
@@ -3429,11 +3478,11 @@ dependencies = [
 name = "rustc_codegen_ssa"
 version = "0.0.0"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "cc",
  "jobserver",
  "libc",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "memmap",
  "num_cpus",
  "rustc",
@@ -3455,7 +3504,7 @@ dependencies = [
 name = "rustc_codegen_utils"
 version = "0.0.0"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "punycode",
  "rustc",
  "rustc-demangle",
@@ -3477,7 +3526,7 @@ dependencies = [
  "indexmap",
  "jobserver",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "parking_lot 0.9.0",
  "rustc-hash",
  "rustc-rayon 0.3.0",
@@ -3495,7 +3544,7 @@ dependencies = [
  "env_logger 0.7.1",
  "graphviz",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc",
  "rustc_codegen_utils",
  "rustc_data_structures",
@@ -3521,7 +3570,7 @@ version = "0.0.0"
 dependencies = [
  "annotate-snippets",
  "atty",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc_data_structures",
  "serialize",
  "syntax_pos",
@@ -3539,7 +3588,7 @@ name = "rustc_incremental"
 version = "0.0.0"
 dependencies = [
  "graphviz",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.0",
  "rustc",
  "rustc_data_structures",
@@ -3561,7 +3610,7 @@ dependencies = [
 name = "rustc_interface"
 version = "0.0.0"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "once_cell",
  "rustc",
  "rustc-rayon 0.3.0",
@@ -3601,7 +3650,7 @@ dependencies = [
 name = "rustc_lint"
 version = "0.0.0"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc",
  "rustc_data_structures",
  "rustc_index",
@@ -3645,7 +3694,7 @@ name = "rustc_metadata"
 version = "0.0.0"
 dependencies = [
  "flate2",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "memmap",
  "rustc",
  "rustc_data_structures",
@@ -3668,7 +3717,7 @@ dependencies = [
  "arena",
  "either",
  "graphviz",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "log_settings",
  "polonius-engine",
  "rustc",
@@ -3699,8 +3748,8 @@ dependencies = [
 name = "rustc_parse"
 version = "0.0.0"
 dependencies = [
- "bitflags",
- "log",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_lexer",
@@ -3714,7 +3763,7 @@ dependencies = [
 name = "rustc_passes"
 version = "0.0.0"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc",
  "rustc_data_structures",
  "rustc_errors",
@@ -3747,7 +3796,7 @@ dependencies = [
 name = "rustc_privacy"
 version = "0.0.0"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc",
  "rustc_data_structures",
  "rustc_typeck",
@@ -3760,8 +3809,8 @@ name = "rustc_resolve"
 version = "0.0.0"
 dependencies = [
  "arena",
- "bitflags",
- "log",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc",
  "rustc_data_structures",
  "rustc_errors",
@@ -3776,7 +3825,7 @@ dependencies = [
 name = "rustc_save_analysis"
 version = "0.0.0"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rls-data",
  "rls-span",
  "rustc",
@@ -3792,8 +3841,8 @@ dependencies = [
 name = "rustc_target"
 version = "0.0.0"
 dependencies = [
- "bitflags",
- "log",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc_data_structures",
  "rustc_index",
  "serialize",
@@ -3815,7 +3864,7 @@ name = "rustc_traits"
 version = "0.0.0"
 dependencies = [
  "chalk-engine",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc",
  "rustc_data_structures",
  "rustc_target",
@@ -3840,7 +3889,7 @@ name = "rustc_typeck"
 version = "0.0.0"
 dependencies = [
  "arena",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc",
  "rustc_data_structures",
  "rustc_errors",
@@ -3888,7 +3937,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7150ac777a2931a53489f5a41eb0937b84e3092a20cd0e73ad436b65b507f607"
 dependencies = [
  "failure",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
 ]
@@ -3919,7 +3968,7 @@ dependencies = [
  "ignore",
  "itertools 0.8.0",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
  "rustc-ap-rustc_target",
  "rustc-ap-syntax",
@@ -3934,6 +3983,20 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "unicode_categories",
+]
+
+[[package]]
+name = "rusty-hermit"
+version = "0.3.11"
+source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4ca1b51f6b06bb9a389ad87e5f831bd4c1cc27e8"
+dependencies = [
+ "bitflags 1.2.1 (git+https://github.com/hermitcore/bitflags.git?branch=hermit)",
+ "compiler_builtins",
+ "log 0.4.8 (git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit)",
+ "multiboot",
+ "rustc-std-workspace-alloc",
+ "rustc-std-workspace-core",
+ "x86",
 ]
 
 [[package]]
@@ -4375,9 +4438,9 @@ dependencies = [
 name = "syntax"
 version = "0.0.0"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_index",
@@ -4392,7 +4455,7 @@ dependencies = [
 name = "syntax_expand"
 version = "0.0.0"
 dependencies = [
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_lexer",
@@ -4408,7 +4471,7 @@ name = "syntax_ext"
 version = "0.0.0"
 dependencies = [
  "fmt_macros",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_parse",
@@ -4664,7 +4727,7 @@ checksum = "b53aeb9d3f5ccf2ebb29e19788f96987fa1355f8fe45ea193928eaaaf3ae820f"
 dependencies = [
  "bytes",
  "futures",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4705,7 +4768,7 @@ dependencies = [
  "crossbeam-utils 0.6.5",
  "futures",
  "lazy_static 1.3.0",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio",
  "num_cpus",
  "parking_lot 0.7.1",
@@ -4764,7 +4827,7 @@ dependencies = [
  "crossbeam-deque 0.6.3",
  "crossbeam-utils 0.6.5",
  "futures",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "num_cpus",
  "rand 0.6.1",
  "tokio-executor",
@@ -4790,7 +4853,7 @@ checksum = "66268575b80f4a4a710ef83d087fdfeeabdce9b74c797535fbac18a2cb906e92"
 dependencies = [
  "bytes",
  "futures",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio",
  "tokio-codec",
  "tokio-io",
@@ -4807,7 +4870,7 @@ dependencies = [
  "futures",
  "iovec",
  "libc",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mio",
  "mio-uds",
  "tokio-codec",
@@ -5029,7 +5092,7 @@ version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6aba5e34f93dc7051dfad05b98a18e9156f27e7b431fe1d2398cb6061c0a1dba"
 dependencies = [
- "bitflags",
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono",
  "failure",
 ]
@@ -5067,7 +5130,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6395efa4784b027708f7451087e647ec73cc74f5d9bc2e418404248d679a230"
 dependencies = [
  "futures",
- "log",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "try-lock",
 ]
 
@@ -5143,6 +5206,18 @@ checksum = "d59cefebd0c892fa2dd6de581e937301d8552cb44489cdff035c6187cb63fa5e"
 dependencies = [
  "winapi 0.2.8",
  "winapi-build",
+]
+
+[[package]]
+name = "x86"
+version = "0.27.0"
+source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4ca1b51f6b06bb9a389ad87e5f831bd4c1cc27e8"
+dependencies = [
+ "bit_field",
+ "bitflags 1.2.1 (git+https://github.com/hermitcore/bitflags.git?branch=hermit)",
+ "compiler_builtins",
+ "raw-cpuid",
+ "rustc-std-workspace-core",
 ]
 
 [[package]]

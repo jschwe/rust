@@ -55,6 +55,7 @@ fn main() {
         println!("cargo:rustc-link-lib=c");
         println!("cargo:rustc-link-lib=compiler_rt");
     } else if target.contains("hermit") {
+        #[cfg(not(feature = "with-hermit"))]
         println!("cargo:rustc-link-lib=hermit");
     }
 }
