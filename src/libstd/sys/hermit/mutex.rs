@@ -1,7 +1,7 @@
 use crate::sys::hermit::abi;
 
 pub struct Mutex {
-    inner: abi::Semaphore
+    inner: Option<abi::Semaphore>
 }
 
 unsafe impl Send for Mutex {}
@@ -9,26 +9,27 @@ unsafe impl Sync for Mutex {}
 
 impl Mutex {
     pub const fn new() -> Mutex {
-        Mutex { inner: abi::Semaphore::new(1) }
+        Mutex { inner: None }
     }
 
     #[inline]
     pub unsafe fn init(&mut self) {
+        self.inner = Some(abi::Semaphore::new(1));
     }
 
     #[inline]
     pub unsafe fn lock(&self) {
-        let _ = self.inner.acquire(None);
+        let _ = self.inner.as_ref().unwrap().acquire(None);
     }
 
     #[inline]
     pub unsafe fn unlock(&self) {
-        let _ = self.inner.release();
+        let _ = self.inner.as_ref().unwrap().release();
     }
 
     #[inline]
     pub unsafe fn try_lock(&self) -> bool {
-        self.inner.try_acquire()
+        self.inner.as_ref().unwrap().try_acquire()
     }
 
     #[inline]

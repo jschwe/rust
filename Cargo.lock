@@ -1851,7 +1851,7 @@ dependencies = [
 [[package]]
 name = "log"
 version = "0.4.8"
-source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4ca1b51f6b06bb9a389ad87e5f831bd4c1cc27e8"
+source = "git+https://github.com/hermitcore/log.git?branch=hermit#bd48cf7e9f3163d8f14c224563e5d6569401fb52"
 dependencies = [
  "cfg-if",
  "compiler_builtins",
@@ -2195,7 +2195,7 @@ dependencies = [
 [[package]]
 name = "multiboot"
 version = "0.5.0"
-source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4ca1b51f6b06bb9a389ad87e5f831bd4c1cc27e8"
+source = "git+https://github.com/hermitcore/rust-multiboot.git?branch=hermit#782f9b333d065c5027662f7b5eca48aae66fcf73"
 dependencies = [
  "compiler_builtins",
  "rustc-std-workspace-core",
@@ -3992,7 +3992,7 @@ source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4c
 dependencies = [
  "bitflags 1.2.1 (git+https://github.com/hermitcore/bitflags.git?branch=hermit)",
  "compiler_builtins",
- "log 0.4.8 (git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit)",
+ "log 0.4.8 (git+https://github.com/hermitcore/log.git?branch=hermit)",
  "multiboot",
  "rustc-std-workspace-alloc",
  "rustc-std-workspace-core",
@@ -5211,7 +5211,7 @@ dependencies = [
 [[package]]
 name = "x86"
 version = "0.27.0"
-source = "git+https://github.com/hermitcore/hermit-abi.git?branch=with-hermit#4ca1b51f6b06bb9a389ad87e5f831bd4c1cc27e8"
+source = "git+https://github.com/hermitcore/rust-x86.git?branch=hermit#f6643e9c32636aa964f5e56bb2ca002716ae50da"
 dependencies = [
  "bit_field",
  "bitflags 1.2.1 (git+https://github.com/hermitcore/bitflags.git?branch=hermit)",
