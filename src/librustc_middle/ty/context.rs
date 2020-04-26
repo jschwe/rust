@@ -14,9 +14,7 @@ use crate::middle::cstore::EncodedMetadata;
 use crate::middle::resolve_lifetime::{self, ObjectLifetimeDefault};
 use crate::middle::stability;
 use crate::mir::interpret::{Allocation, ConstValue, Scalar};
-use crate::mir::{
-    interpret, BodyAndCache, Field, Local, Place, PlaceElem, ProjectionKind, Promoted,
-};
+use crate::mir::{interpret, Body, Field, Local, Place, PlaceElem, ProjectionKind, Promoted};
 use crate::traits;
 use crate::traits::{Clause, Clauses, Goal, GoalKind, Goals};
 use crate::ty::query;
@@ -50,7 +48,7 @@ use rustc_errors::ErrorReported;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, LocalDefId, LOCAL_CRATE};
-use rustc_hir::definitions::{DefPathData, DefPathHash, Definitions};
+use rustc_hir::definitions::{DefPathHash, Definitions};
 use rustc_hir::lang_items;
 use rustc_hir::lang_items::PanicLocationLangItem;
 use rustc_hir::{HirId, Node, TraitCandidate};
@@ -182,7 +180,7 @@ pub struct CommonLifetimes<'tcx> {
 }
 
 pub struct CommonConsts<'tcx> {
-    pub err: &'tcx Const<'tcx>,
+    pub unit: &'tcx Const<'tcx>,
 }
 
 pub struct LocalTableInContext<'a, V> {
@@ -298,14 +296,14 @@ pub struct ResolvedOpaqueTy<'tcx> {
 ///
 /// ```ignore (pseudo-Rust)
 /// async move {
-///     let x: T = ...;
+///     let x: T = expr;
 ///     foo.await
 ///     ...
 /// }
 /// ```
 ///
-/// Here, we would store the type `T`, the span of the value `x`, and the "scope-span" for
-/// the scope that contains `x`.
+/// Here, we would store the type `T`, the span of the value `x`, the "scope-span" for
+/// the scope that contains `x`, the expr `T` evaluated from, and the span of `foo.await`.
 #[derive(RustcEncodable, RustcDecodable, Clone, Debug, Eq, Hash, PartialEq, HashStable)]
 pub struct GeneratorInteriorTypeCause<'tcx> {
     /// Type of the captured binding.
@@ -314,6 +312,8 @@ pub struct GeneratorInteriorTypeCause<'tcx> {
     pub span: Span,
     /// Span of the scope of the captured binding.
     pub scope_span: Option<Span>,
+    /// Span of `.await` or `yield` expression.
+    pub yield_span: Span,
     /// Expr which the type evaluated from.
     pub expr: Option<hir::HirId>,
 }
@@ -410,8 +410,8 @@ pub struct TypeckTables<'tcx> {
     pub used_trait_imports: Lrc<DefIdSet>,
 
     /// If any errors occurred while type-checking this body,
-    /// this field will be set to `true`.
-    pub tainted_by_errors: bool,
+    /// this field will be set to `Some(ErrorReported)`.
+    pub tainted_by_errors: Option<ErrorReported>,
 
     /// All the opaque types that are restricted to concrete types
     /// by this function.
@@ -447,7 +447,7 @@ impl<'tcx> TypeckTables<'tcx> {
             fru_field_types: Default::default(),
             coercion_casts: Default::default(),
             used_trait_imports: Lrc::new(Default::default()),
-            tainted_by_errors: false,
+            tainted_by_errors: None,
             concrete_opaque_types: Default::default(),
             upvar_list: Default::default(),
             generator_interior_types: Default::default(),
@@ -858,9 +858,9 @@ impl<'tcx> CommonConsts<'tcx> {
         let mk_const = |c| interners.const_.intern(c, |c| Interned(interners.arena.alloc(c))).0;
 
         CommonConsts {
-            err: mk_const(ty::Const {
+            unit: mk_const(ty::Const {
                 val: ty::ConstKind::Value(ConstValue::Scalar(Scalar::zst())),
-                ty: types.err,
+                ty: types.unit,
             }),
         }
     }
@@ -991,21 +991,21 @@ pub struct GlobalCtxt<'tcx> {
 }
 
 impl<'tcx> TyCtxt<'tcx> {
-    pub fn alloc_steal_mir(self, mir: BodyAndCache<'tcx>) -> &'tcx Steal<BodyAndCache<'tcx>> {
+    pub fn alloc_steal_mir(self, mir: Body<'tcx>) -> &'tcx Steal<Body<'tcx>> {
         self.arena.alloc(Steal::new(mir))
     }
 
     pub fn alloc_steal_promoted(
         self,
-        promoted: IndexVec<Promoted, BodyAndCache<'tcx>>,
-    ) -> &'tcx Steal<IndexVec<Promoted, BodyAndCache<'tcx>>> {
+        promoted: IndexVec<Promoted, Body<'tcx>>,
+    ) -> &'tcx Steal<IndexVec<Promoted, Body<'tcx>>> {
         self.arena.alloc(Steal::new(promoted))
     }
 
     pub fn intern_promoted(
         self,
-        promoted: IndexVec<Promoted, BodyAndCache<'tcx>>,
-    ) -> &'tcx IndexVec<Promoted, BodyAndCache<'tcx>> {
+        promoted: IndexVec<Promoted, Body<'tcx>>,
+    ) -> &'tcx IndexVec<Promoted, Body<'tcx>> {
         self.arena.alloc(promoted)
     }
 
@@ -1126,13 +1126,16 @@ impl<'tcx> TyCtxt<'tcx> {
 
         let mut trait_map: FxHashMap<_, FxHashMap<_, _>> = FxHashMap::default();
         for (k, v) in resolutions.trait_map {
-            let hir_id = definitions.node_id_to_hir_id(k);
-            let map = trait_map.entry(hir_id.owner).or_default();
-            let v = v
-                .into_iter()
-                .map(|tc| tc.map_import_ids(|id| definitions.node_id_to_hir_id(id)))
-                .collect();
-            map.insert(hir_id.local_id, StableVec::new(v));
+            // FIXME(#71104) Should really be using just `node_id_to_hir_id` but
+            // some `NodeId` do not seem to have a corresponding HirId.
+            if let Some(hir_id) = definitions.opt_node_id_to_hir_id(k) {
+                let map = trait_map.entry(hir_id.owner).or_default();
+                let v = v
+                    .into_iter()
+                    .map(|tc| tc.map_import_ids(|id| definitions.node_id_to_hir_id(id)))
+                    .collect();
+                map.insert(hir_id.local_id, StableVec::new(v));
+            }
         }
 
         GlobalCtxt {
@@ -1162,17 +1165,17 @@ impl<'tcx> TyCtxt<'tcx> {
             maybe_unused_trait_imports: resolutions
                 .maybe_unused_trait_imports
                 .into_iter()
-                .map(|id| definitions.local_def_id(id))
+                .map(|id| definitions.local_def_id(id).to_def_id())
                 .collect(),
             maybe_unused_extern_crates: resolutions
                 .maybe_unused_extern_crates
                 .into_iter()
-                .map(|(id, sp)| (definitions.local_def_id(id), sp))
+                .map(|(id, sp)| (definitions.local_def_id(id).to_def_id(), sp))
                 .collect(),
             glob_map: resolutions
                 .glob_map
                 .into_iter()
-                .map(|(id, names)| (definitions.local_def_id(id), names))
+                .map(|(id, names)| (definitions.local_def_id(id).to_def_id(), names))
                 .collect(),
             extern_prelude: resolutions.extern_prelude,
             untracked_crate: krate,
@@ -1410,9 +1413,9 @@ impl<'tcx> TyCtxt<'tcx> {
             _ => return None, // not a free region
         };
 
-        let hir_id = self.hir().as_local_hir_id(suitable_region_binding_scope).unwrap();
+        let hir_id = self.hir().as_local_hir_id(suitable_region_binding_scope.expect_local());
         let is_impl_item = match self.hir().find(hir_id) {
-            Some(Node::Item(..)) | Some(Node::TraitItem(..)) => false,
+            Some(Node::Item(..) | Node::TraitItem(..)) => false,
             Some(Node::ImplItem(..)) => {
                 self.is_bound_region_in_impl_item(suitable_region_binding_scope)
             }
@@ -1428,7 +1431,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn return_type_impl_trait(&self, scope_def_id: DefId) -> Option<(Ty<'tcx>, Span)> {
         // HACK: `type_of_def_id()` will fail on these (#55796), so return `None`.
-        let hir_id = self.hir().as_local_hir_id(scope_def_id).unwrap();
+        let hir_id = self.hir().as_local_hir_id(scope_def_id.expect_local());
         match self.hir().get(hir_id) {
             Node::Item(item) => {
                 match item.kind {
@@ -1489,21 +1492,13 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// Returns a displayable description and article for the given `def_id` (e.g. `("a", "struct")`).
     pub fn article_and_description(&self, def_id: DefId) -> (&'static str, &'static str) {
-        self.def_kind(def_id)
-            .map(|def_kind| (def_kind.article(), def_kind.descr(def_id)))
-            .unwrap_or_else(|| match self.def_key(def_id).disambiguated_data.data {
-                DefPathData::ClosureExpr => match self.generator_kind(def_id) {
-                    None => ("a", "closure"),
-                    Some(rustc_hir::GeneratorKind::Async(..)) => ("an", "async closure"),
-                    Some(rustc_hir::GeneratorKind::Gen) => ("a", "generator"),
-                },
-                DefPathData::LifetimeNs(..) => ("a", "lifetime"),
-                DefPathData::Impl => ("an", "implementation"),
-                DefPathData::TypeNs(..) | DefPathData::ValueNs(..) | DefPathData::MacroNs(..) => {
-                    unreachable!()
-                }
-                _ => bug!("article_and_description called on def_id {:?}", def_id),
-            })
+        match self.def_kind(def_id) {
+            DefKind::Generator => match self.generator_kind(def_id).unwrap() {
+                rustc_hir::GeneratorKind::Async(..) => ("an", "async closure"),
+                rustc_hir::GeneratorKind::Gen => ("a", "generator"),
+            },
+            def_kind => (def_kind.article(), def_kind.descr(def_id)),
+        }
     }
 }
 
@@ -2065,10 +2060,6 @@ macro_rules! direct_interners {
     }
 }
 
-pub fn keep_local<'tcx, T: ty::TypeFoldable<'tcx>>(x: &T) -> bool {
-    x.has_type_flags(ty::TypeFlags::KEEP_IN_LOCAL_TCX)
-}
-
 direct_interners!(
     region: mk_region(RegionKind),
     goal: mk_goal(GoalKind<'tcx>),
@@ -2210,6 +2201,12 @@ impl<'tcx> TyCtxt<'tcx> {
     #[inline]
     pub fn mk_lang_item(self, ty: Ty<'tcx>, item: lang_items::LangItem) -> Option<Ty<'tcx>> {
         let def_id = self.lang_items().require(item).ok()?;
+        Some(self.mk_generic_adt(def_id, ty))
+    }
+
+    #[inline]
+    pub fn mk_diagnostic_item(self, ty: Ty<'tcx>, name: Symbol) -> Option<Ty<'tcx>> {
+        let def_id = self.get_diagnostic_item(name)?;
         Some(self.mk_generic_adt(def_id, ty))
     }
 
@@ -2721,7 +2718,7 @@ pub fn provide(providers: &mut ty::query::Providers<'_>) {
     };
     providers.names_imported_by_glob_use = |tcx, id| {
         assert_eq!(id.krate, LOCAL_CRATE);
-        Lrc::new(tcx.glob_map.get(&id).cloned().unwrap_or_default())
+        tcx.arena.alloc(tcx.glob_map.get(&id).cloned().unwrap_or_default())
     };
 
     providers.lookup_stability = |tcx, id| {

@@ -1388,7 +1388,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         }
 
         // Insert a Shallow borrow of any places that is switched on.
-        fake_borrows.as_mut().map(|fb| fb.insert(match_place));
+        if let Some(fb) = fake_borrows {
+            fb.insert(match_place);
+        }
 
         // perform the test, branching to one of N blocks. For each of
         // those N possible outcomes, create a (initially empty)
@@ -1903,9 +1905,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 self.schedule_drop_for_binding(binding.var_id, binding.span, OutsideGuard);
             }
             let rvalue = match binding.binding_mode {
-                BindingMode::ByValue => {
-                    Rvalue::Use(self.consume_by_copy_or_move(binding.source.clone()))
-                }
+                BindingMode::ByValue => Rvalue::Use(self.consume_by_copy_or_move(binding.source)),
                 BindingMode::ByRef(borrow_kind) => {
                     Rvalue::Ref(re_erased, borrow_kind, binding.source)
                 }

@@ -13,10 +13,10 @@ use rustc_ast::mut_visit::*;
 use rustc_ast::ptr::P;
 use rustc_ast::token;
 use rustc_ast::tokenstream::TokenStream;
-use rustc_ast::util::map_in_place::MapInPlace;
 use rustc_ast::visit::{self, AssocCtxt, Visitor};
 use rustc_ast_pretty::pprust;
 use rustc_attr::{self as attr, is_builtin_attr, HasAttrs};
+use rustc_data_structures::map_in_place::MapInPlace;
 use rustc_errors::{Applicability, PResult};
 use rustc_feature::Features;
 use rustc_parse::parser::Parser;
@@ -507,9 +507,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 expanded_fragments.push(Vec::new());
             }
             expanded_fragments[depth - 1].push((expn_id, expanded_fragment));
-            if !self.cx.ecfg.single_step {
-                invocations.extend(new_invocations.into_iter().rev());
-            }
+            invocations.extend(new_invocations.into_iter().rev());
         }
 
         self.cx.current_expansion = orig_expansion_data;
@@ -1174,10 +1172,10 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
             // ignore derives so they remain unused
             let (attr, after_derive) = self.classify_nonitem(&mut expr);
 
-            if attr.is_some() {
+            if let Some(ref attr_value) = attr {
                 // Collect the invoc regardless of whether or not attributes are permitted here
                 // expansion will eat the attribute so it won't error later.
-                attr.as_ref().map(|a| self.cfg.maybe_emit_expr_attr_err(a));
+                self.cfg.maybe_emit_expr_attr_err(attr_value);
 
                 // AstFragmentKind::Expr requires the macro to emit an expression.
                 return self
@@ -1324,8 +1322,8 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
             // Ignore derives so they remain unused.
             let (attr, after_derive) = self.classify_nonitem(&mut expr);
 
-            if attr.is_some() {
-                attr.as_ref().map(|a| self.cfg.maybe_emit_expr_attr_err(a));
+            if let Some(ref attr_value) = attr {
+                self.cfg.maybe_emit_expr_attr_err(attr_value);
 
                 return self
                     .collect_attr(
@@ -1819,7 +1817,6 @@ pub struct ExpansionConfig<'feat> {
     pub recursion_limit: usize,
     pub trace_mac: bool,
     pub should_test: bool, // If false, strip `#[test]` nodes
-    pub single_step: bool,
     pub keep_macs: bool,
 }
 
@@ -1831,7 +1828,6 @@ impl<'feat> ExpansionConfig<'feat> {
             recursion_limit: 1024,
             trace_mac: false,
             should_test: false,
-            single_step: false,
             keep_macs: false,
         }
     }

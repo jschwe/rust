@@ -627,8 +627,14 @@ impl Step for RustdocJSStd {
         if let Some(ref nodejs) = builder.config.nodejs {
             let mut command = Command::new(nodejs);
             command
-                .arg(builder.src.join("src/tools/rustdoc-js-std/tester.js"))
+                .arg(builder.src.join("src/tools/rustdoc-js/tester.js"))
+                .arg("--crate-name")
+                .arg("std")
+                .arg("--resource-suffix")
+                .arg(crate::channel::CFG_RELEASE_NUM)
+                .arg("--doc-folder")
                 .arg(builder.doc_out(self.target))
+                .arg("--test-folder")
                 .arg(builder.src.join("src/test/rustdoc-js-std"));
             builder.ensure(crate::doc::Std { target: self.target, stage: builder.top_stage });
             builder.run(&mut command);
@@ -1719,7 +1725,7 @@ impl Step for Crate {
         let mut cargo = builder.cargo(compiler, mode, target, test_kind.subcommand());
         match mode {
             Mode::Std => {
-                compile::std_cargo(builder, target, &mut cargo);
+                compile::std_cargo(builder, target, compiler.stage, &mut cargo);
             }
             Mode::Rustc => {
                 builder.ensure(compile::Rustc { compiler, target });

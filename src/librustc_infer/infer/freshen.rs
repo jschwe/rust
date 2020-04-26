@@ -173,9 +173,7 @@ impl<'a, 'tcx> TypeFolder<'tcx> for TypeFreshener<'a, 'tcx> {
                 ty::FreshFloatTy,
             ),
 
-            ty::Infer(ty::FreshTy(ct))
-            | ty::Infer(ty::FreshIntTy(ct))
-            | ty::Infer(ty::FreshFloatTy(ct)) => {
+            ty::Infer(ty::FreshTy(ct) | ty::FreshIntTy(ct) | ty::FreshFloatTy(ct)) => {
                 if ct >= self.ty_freshen_count {
                     bug!(
                         "Encountered a freshend type with id {} \
@@ -251,7 +249,10 @@ impl<'a, 'tcx> TypeFolder<'tcx> for TypeFreshener<'a, 'tcx> {
                 bug!("unexpected const {:?}", ct)
             }
 
-            ty::ConstKind::Param(_) | ty::ConstKind::Value(_) | ty::ConstKind::Unevaluated(..) => {}
+            ty::ConstKind::Param(_)
+            | ty::ConstKind::Value(_)
+            | ty::ConstKind::Unevaluated(..)
+            | ty::ConstKind::Error => {}
         }
 
         ct.super_fold_with(self)

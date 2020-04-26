@@ -12,7 +12,7 @@ pub fn check_crate(tcx: TyCtxt<'_>) {
     let mut used_trait_imports = DefIdSet::default();
     for &body_id in tcx.hir().krate().bodies.keys() {
         let item_def_id = tcx.hir().body_owner_def_id(body_id);
-        let imports = tcx.used_trait_imports(item_def_id);
+        let imports = tcx.used_trait_imports(item_def_id.to_def_id());
         debug!("GatherVisitor: item_def_id={:?} with imports {:#?}", item_def_id, imports);
         used_trait_imports.extend(imports.iter());
     }
@@ -50,7 +50,7 @@ impl CheckVisitor<'tcx> {
             return;
         }
 
-        if self.used_trait_imports.contains(&def_id) {
+        if self.used_trait_imports.contains(&def_id.to_def_id()) {
             return;
         }
 
@@ -89,10 +89,8 @@ fn unused_crates_lint(tcx: TyCtxt<'_>) {
             // Note that if we carry through to the `extern_mod_stmt_cnum` query
             // below it'll cause a panic because `def_id` is actually bogus at this
             // point in time otherwise.
-            if let Some(id) = tcx.hir().as_local_hir_id(def_id) {
-                if tcx.hir().find(id).is_none() {
-                    return false;
-                }
+            if tcx.hir().find(tcx.hir().as_local_hir_id(def_id.expect_local())).is_none() {
+                return false;
             }
             true
         })
@@ -115,7 +113,7 @@ fn unused_crates_lint(tcx: TyCtxt<'_>) {
     });
 
     for extern_crate in &crates_to_lint {
-        let id = tcx.hir().as_local_hir_id(extern_crate.def_id).unwrap();
+        let id = tcx.hir().as_local_hir_id(extern_crate.def_id.expect_local());
         let item = tcx.hir().expect_item(id);
 
         // If the crate is fully unused, we suggest removing it altogether.
@@ -216,7 +214,7 @@ impl<'a, 'tcx, 'v> ItemLikeVisitor<'v> for CollectExternCrateVisitor<'a, 'tcx> {
         if let hir::ItemKind::ExternCrate(orig_name) = item.kind {
             let extern_crate_def_id = self.tcx.hir().local_def_id(item.hir_id);
             self.crates_to_lint.push(ExternCrateToLint {
-                def_id: extern_crate_def_id,
+                def_id: extern_crate_def_id.to_def_id(),
                 span: item.span,
                 orig_name,
                 warn_if_unused: !item.ident.as_str().starts_with('_'),

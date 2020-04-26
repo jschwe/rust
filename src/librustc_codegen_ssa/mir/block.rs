@@ -111,7 +111,9 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
         destination: Option<(ReturnDest<'tcx, Bx::Value>, mir::BasicBlock)>,
         cleanup: Option<mir::BasicBlock>,
     ) {
-        if let Some(cleanup) = cleanup {
+        // If there is a cleanup block and the function we're calling can unwind, then
+        // do an invoke, otherwise do a call.
+        if let Some(cleanup) = cleanup.filter(|_| fn_abi.can_unwind) {
             let ret_bx = if let Some((_, target)) = destination {
                 fx.blocks[target]
             } else {
@@ -150,7 +152,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
     // a loop.
     fn maybe_sideeffect<Bx: BuilderMethods<'a, 'tcx>>(
         &self,
-        mir: mir::ReadOnlyBodyAndCache<'tcx, 'tcx>,
+        mir: &'tcx mir::Body<'tcx>,
         bx: &mut Bx,
         targets: &[mir::BasicBlock],
     ) {
@@ -304,7 +306,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         target: mir::BasicBlock,
         unwind: Option<mir::BasicBlock>,
     ) {
-        let ty = location.ty(*self.mir, bx.tcx()).ty;
+        let ty = location.ty(self.mir, bx.tcx()).ty;
         let ty = self.monomorphize(&ty);
         let drop_fn = Instance::resolve_drop_in_place(bx.tcx(), ty);
 
@@ -535,6 +537,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             ty::FnDef(def_id, substs) => (
                 Some(
                     ty::Instance::resolve(bx.tcx(), ty::ParamEnv::reveal_all(), def_id, substs)
+                        .unwrap()
                         .unwrap(),
                 ),
                 None,
@@ -569,7 +572,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         let extra_args = extra_args
             .iter()
             .map(|op_arg| {
-                let op_ty = op_arg.ty(*self.mir, bx.tcx());
+                let op_ty = op_arg.ty(self.mir, bx.tcx());
                 self.monomorphize(&op_ty)
             })
             .collect::<Vec<_>>();

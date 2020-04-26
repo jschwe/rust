@@ -182,8 +182,7 @@ pub fn unsize_thin_ptr<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
 ) -> (Bx::Value, Bx::Value) {
     debug!("unsize_thin_ptr: {:?} => {:?}", src_ty, dst_ty);
     match (&src_ty.kind, &dst_ty.kind) {
-        (&ty::Ref(_, a, _), &ty::Ref(_, b, _))
-        | (&ty::Ref(_, a, _), &ty::RawPtr(ty::TypeAndMut { ty: b, .. }))
+        (&ty::Ref(_, a, _), &ty::Ref(_, b, _) | &ty::RawPtr(ty::TypeAndMut { ty: b, .. }))
         | (&ty::RawPtr(ty::TypeAndMut { ty: a, .. }), &ty::RawPtr(ty::TypeAndMut { ty: b, .. })) => {
             assert!(bx.cx().type_is_sized(a));
             let ptr_ty = bx.cx().type_ptr_to(bx.cx().backend_type(bx.cx().layout_of(b)));
@@ -232,9 +231,7 @@ pub fn coerce_unsized_into<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     let src_ty = src.layout.ty;
     let dst_ty = dst.layout.ty;
     match (&src_ty.kind, &dst_ty.kind) {
-        (&ty::Ref(..), &ty::Ref(..))
-        | (&ty::Ref(..), &ty::RawPtr(..))
-        | (&ty::RawPtr(..), &ty::RawPtr(..)) => {
+        (&ty::Ref(..), &ty::Ref(..) | &ty::RawPtr(..)) | (&ty::RawPtr(..), &ty::RawPtr(..)) => {
             let (base, info) = match bx.load_operand(src).val {
                 OperandValue::Pair(base, info) => {
                     // fat-ptr to fat-ptr unsize preserves the vtable
@@ -468,6 +465,7 @@ pub fn maybe_create_entry_wrapper<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
                     start_def_id,
                     cx.tcx().intern_substs(&[main_ret_ty.into()]),
                 )
+                .unwrap()
                 .unwrap(),
             );
             (
@@ -507,7 +505,7 @@ fn get_argc_argv<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     }
 }
 
-pub const CODEGEN_WORKER_ID: usize = ::std::usize::MAX;
+pub const CODEGEN_WORKER_ID: usize = usize::MAX;
 
 pub fn codegen_crate<B: ExtraBackendMethods>(
     backend: B,
@@ -533,7 +531,6 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     // Run the monomorphization collector and partition the collected items into
     // codegen units.
     let codegen_units = tcx.collect_and_partition_mono_items(LOCAL_CRATE).1;
-    let codegen_units = (*codegen_units).clone();
 
     // Force all codegen_unit queries so they are already either red or green
     // when compile_codegen_unit accesses them. We are not able to re-execute
@@ -541,7 +538,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     // lead to having to re-execute compile_codegen_unit, possibly
     // unnecessarily.
     if tcx.dep_graph.is_fully_enabled() {
-        for cgu in &codegen_units {
+        for cgu in codegen_units {
             tcx.codegen_unit(cgu.name());
         }
     }
@@ -603,7 +600,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     // We sort the codegen units by size. This way we can schedule work for LLVM
     // a bit more efficiently.
     let codegen_units = {
-        let mut codegen_units = codegen_units;
+        let mut codegen_units = codegen_units.iter().collect::<Vec<_>>();
         codegen_units.sort_by_cached_key(|cgu| cmp::Reverse(cgu.size_estimate()));
         codegen_units
     };

@@ -1736,15 +1736,24 @@ pub struct Destination {
 #[derive(Copy, Clone, PartialEq, Eq, Debug, RustcEncodable, RustcDecodable, HashStable_Generic)]
 pub enum YieldSource {
     /// An `<expr>.await`.
-    Await,
+    Await { expr: Option<HirId> },
     /// A plain `yield`.
     Yield,
+}
+
+impl YieldSource {
+    pub fn is_await(&self) -> bool {
+        match self {
+            YieldSource::Await { .. } => true,
+            YieldSource::Yield => false,
+        }
+    }
 }
 
 impl fmt::Display for YieldSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            YieldSource::Await => "`await`",
+            YieldSource::Await { .. } => "`await`",
             YieldSource::Yield => "`yield`",
         })
     }
@@ -1755,7 +1764,7 @@ impl From<GeneratorKind> for YieldSource {
         match kind {
             // Guess based on the kind of the current generator.
             GeneratorKind::Gen => Self::Yield,
-            GeneratorKind::Async(_) => Self::Await,
+            GeneratorKind::Async(_) => Self::Await { expr: None },
         }
     }
 }
@@ -2443,27 +2452,6 @@ pub enum ItemKind<'hir> {
 }
 
 impl ItemKind<'_> {
-    pub fn descr(&self) -> &str {
-        match *self {
-            ItemKind::ExternCrate(..) => "extern crate",
-            ItemKind::Use(..) => "`use` import",
-            ItemKind::Static(..) => "static item",
-            ItemKind::Const(..) => "constant item",
-            ItemKind::Fn(..) => "function",
-            ItemKind::Mod(..) => "module",
-            ItemKind::ForeignMod(..) => "extern block",
-            ItemKind::GlobalAsm(..) => "global asm item",
-            ItemKind::TyAlias(..) => "type alias",
-            ItemKind::OpaqueTy(..) => "opaque type",
-            ItemKind::Enum(..) => "enum",
-            ItemKind::Struct(..) => "struct",
-            ItemKind::Union(..) => "union",
-            ItemKind::Trait(..) => "trait",
-            ItemKind::TraitAlias(..) => "trait alias",
-            ItemKind::Impl { .. } => "implementation",
-        }
-    }
-
     pub fn generics(&self) -> Option<&Generics<'_>> {
         Some(match *self {
             ItemKind::Fn(_, ref generics, _)
@@ -2515,7 +2503,7 @@ pub struct ImplItemRef<'hir> {
 #[derive(Copy, Clone, PartialEq, RustcEncodable, RustcDecodable, Debug, HashStable_Generic)]
 pub enum AssocItemKind {
     Const,
-    Method { has_self: bool },
+    Fn { has_self: bool },
     Type,
     OpaqueTy,
 }
@@ -2540,16 +2528,6 @@ pub enum ForeignItemKind<'hir> {
     Static(&'hir Ty<'hir>, Mutability),
     /// A foreign type.
     Type,
-}
-
-impl ForeignItemKind<'hir> {
-    pub fn descriptive_variant(&self) -> &str {
-        match *self {
-            ForeignItemKind::Fn(..) => "foreign function",
-            ForeignItemKind::Static(..) => "foreign static item",
-            ForeignItemKind::Type => "foreign type",
-        }
-    }
 }
 
 /// A variable captured by a closure.

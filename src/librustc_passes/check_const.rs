@@ -52,8 +52,9 @@ impl NonConstExpr {
 
             Self::Loop(While)
             | Self::Loop(WhileLet)
-            | Self::Match(WhileDesugar)
-            | Self::Match(WhileLetDesugar) => &[sym::const_loop, sym::const_if_match],
+            | Self::Match(WhileDesugar | WhileLetDesugar) => {
+                &[sym::const_loop, sym::const_if_match]
+            }
 
             // A `for` loop's desugaring contains a call to `IntoIterator::into_iter`,
             // so they are not yet allowed with `#![feature(const_loop)]`.
@@ -74,16 +75,16 @@ enum ConstKind {
 }
 
 impl ConstKind {
-    fn for_body(body: &hir::Body<'_>, hir_map: Map<'_>) -> Option<Self> {
-        let is_const_fn = |id| hir_map.fn_sig_by_hir_id(id).unwrap().header.is_const();
-
-        let owner = hir_map.body_owner(body.id());
-        let const_kind = match hir_map.body_owner_kind(owner) {
+    fn for_body(body: &hir::Body<'_>, tcx: TyCtxt<'_>) -> Option<Self> {
+        let owner = tcx.hir().body_owner(body.id());
+        let const_kind = match tcx.hir().body_owner_kind(owner) {
             hir::BodyOwnerKind::Const => Self::Const,
             hir::BodyOwnerKind::Static(Mutability::Mut) => Self::StaticMut,
             hir::BodyOwnerKind::Static(Mutability::Not) => Self::Static,
 
-            hir::BodyOwnerKind::Fn if is_const_fn(owner) => Self::ConstFn,
+            hir::BodyOwnerKind::Fn if tcx.is_const_fn_raw(tcx.hir().local_def_id(owner)) => {
+                Self::ConstFn
+            }
             hir::BodyOwnerKind::Fn | hir::BodyOwnerKind::Closure => return None,
         };
 
@@ -211,7 +212,7 @@ impl<'tcx> Visitor<'tcx> for CheckConstVisitor<'tcx> {
     }
 
     fn visit_body(&mut self, body: &'tcx hir::Body<'tcx>) {
-        let kind = ConstKind::for_body(body, self.tcx.hir());
+        let kind = ConstKind::for_body(body, self.tcx);
         self.recurse_into(kind, |this| intravisit::walk_body(this, body));
     }
 

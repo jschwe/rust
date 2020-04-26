@@ -32,7 +32,7 @@ use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder};
 use rustc_expand::base::SyntaxExtension;
 use rustc_hir::def::Namespace::*;
 use rustc_hir::def::{self, CtorOf, DefKind, NonMacroAttrKind, PartialRes};
-use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, CRATE_DEF_INDEX};
+use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, CRATE_DEF_INDEX};
 use rustc_hir::definitions::{DefKey, Definitions};
 use rustc_hir::PrimTy::{self, Bool, Char, Float, Int, Str, Uint};
 use rustc_hir::{GlobMap, TraitMap};
@@ -499,7 +499,9 @@ impl<'a> ModuleData<'a> {
         F: FnMut(&mut R, Ident, Namespace, &'a NameBinding<'a>),
     {
         for (key, name_resolution) in resolver.as_mut().resolutions(self).borrow().iter() {
-            name_resolution.borrow().binding.map(|binding| f(resolver, key.ident, key.ns, binding));
+            if let Some(binding) = name_resolution.borrow().binding {
+                f(resolver, key.ident, key.ns, binding);
+            }
         }
     }
 
@@ -534,7 +536,7 @@ impl<'a> ModuleData<'a> {
 
     fn nearest_item_scope(&'a self) -> Module<'a> {
         match self.kind {
-            ModuleKind::Def(DefKind::Enum, ..) | ModuleKind::Def(DefKind::Trait, ..) => {
+            ModuleKind::Def(DefKind::Enum | DefKind::Trait, ..) => {
                 self.parent.expect("enum or trait module without a parent")
             }
             _ => self,
@@ -705,8 +707,10 @@ impl<'a> NameBinding<'a> {
 
     fn is_variant(&self) -> bool {
         match self.kind {
-            NameBindingKind::Res(Res::Def(DefKind::Variant, _), _)
-            | NameBindingKind::Res(Res::Def(DefKind::Ctor(CtorOf::Variant, ..), _), _) => true,
+            NameBindingKind::Res(
+                Res::Def(DefKind::Variant | DefKind::Ctor(CtorOf::Variant, ..), _),
+                _,
+            ) => true,
             _ => false,
         }
     }
@@ -741,9 +745,7 @@ impl<'a> NameBinding<'a> {
 
     fn is_importable(&self) -> bool {
         match self.res() {
-            Res::Def(DefKind::AssocConst, _)
-            | Res::Def(DefKind::AssocFn, _)
-            | Res::Def(DefKind::AssocTy, _) => false,
+            Res::Def(DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy, _) => false,
             _ => true,
         }
     }
@@ -885,7 +887,7 @@ pub struct Resolver<'a> {
     /// some AST passes can generate identifiers that only resolve to local or
     /// language items.
     empty_module: Module<'a>,
-    module_map: FxHashMap<DefId, Module<'a>>,
+    module_map: FxHashMap<LocalDefId, Module<'a>>,
     extern_module_map: FxHashMap<DefId, Module<'a>>,
     binding_parent_modules: FxHashMap<PtrKey<'a, NameBinding<'a>>, Module<'a>>,
     underscore_disambiguator: u32,
@@ -1121,7 +1123,7 @@ impl<'a> Resolver<'a> {
             )
         });
         let mut module_map = FxHashMap::default();
-        module_map.insert(DefId::local(CRATE_DEF_INDEX), graph_root);
+        module_map.insert(LocalDefId { local_def_index: CRATE_DEF_INDEX }, graph_root);
 
         let mut definitions = Definitions::default();
         definitions.create_root_def(crate_name, session.local_crate_disambiguator());
@@ -1539,8 +1541,9 @@ impl<'a> Resolver<'a> {
                     let expn_data = expn_id.expn_data();
                     match expn_data.kind {
                         ExpnKind::Root
-                        | ExpnKind::Macro(MacroKind::Bang, _)
-                        | ExpnKind::Macro(MacroKind::Derive, _) => Scope::DeriveHelpersCompat,
+                        | ExpnKind::Macro(MacroKind::Bang | MacroKind::Derive, _) => {
+                            Scope::DeriveHelpersCompat
+                        }
                         _ => Scope::DeriveHelpers(expn_data.parent),
                     }
                 }
@@ -2480,8 +2483,7 @@ impl<'a> Resolver<'a> {
             let (span, found_use) = UsePlacementFinder::check(krate, node_id);
             if !candidates.is_empty() {
                 diagnostics::show_candidates(&mut err, span, &candidates, better, found_use);
-            }
-            if let Some((span, msg, sugg, appl)) = suggestion {
+            } else if let Some((span, msg, sugg, appl)) = suggestion {
                 err.span_suggestion(span, msg, sugg, appl);
             }
             err.emit();
@@ -2502,10 +2504,8 @@ impl<'a> Resolver<'a> {
         }
 
         let container = match parent.kind {
-            ModuleKind::Def(DefKind::Mod, _, _) => "module",
-            ModuleKind::Def(DefKind::Trait, _, _) => "trait",
+            ModuleKind::Def(kind, _, _) => kind.descr(parent.def_id().unwrap()),
             ModuleKind::Block(..) => "block",
-            _ => "enum",
         };
 
         let old_noun = match old_binding.is_import() {

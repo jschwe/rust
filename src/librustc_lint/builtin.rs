@@ -36,6 +36,7 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::{GenericParamKind, PatKind};
 use rustc_hir::{HirIdSet, Node};
 use rustc_middle::lint::LintDiagnosticBuilder;
+use rustc_middle::ty::subst::GenericArgKind;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::lint::FutureIncompatibleInfo;
 use rustc_span::edition::Edition;
@@ -104,11 +105,13 @@ declare_lint_pass!(BoxPointers => [BOX_POINTERS]);
 
 impl BoxPointers {
     fn check_heap_type(&self, cx: &LateContext<'_, '_>, span: Span, ty: Ty<'_>) {
-        for leaf_ty in ty.walk() {
-            if leaf_ty.is_box() {
-                cx.struct_span_lint(BOX_POINTERS, span, |lint| {
-                    lint.build(&format!("type uses owned (Box type) pointers: {}", ty)).emit()
-                });
+        for leaf in ty.walk() {
+            if let GenericArgKind::Type(leaf_ty) = leaf.unpack() {
+                if leaf_ty.is_box() {
+                    cx.struct_span_lint(BOX_POINTERS, span, |lint| {
+                        lint.build(&format!("type uses owned (Box type) pointers: {}", ty)).emit()
+                    });
+                }
             }
         }
     }
@@ -433,7 +436,8 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MissingDoc {
                 // If the trait is private, add the impl items to `private_traits` so they don't get
                 // reported for missing docs.
                 let real_trait = trait_ref.path.res.def_id();
-                if let Some(hir_id) = cx.tcx.hir().as_local_hir_id(real_trait) {
+                if let Some(def_id) = real_trait.as_local() {
+                    let hir_id = cx.tcx.hir().as_local_hir_id(def_id);
                     if let Some(Node::Item(item)) = cx.tcx.hir().find(hir_id) {
                         if let hir::VisibilityKind::Inherited = item.vis.node {
                             for impl_item_ref in items {
@@ -458,7 +462,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MissingDoc {
         };
 
         let def_id = cx.tcx.hir().local_def_id(it.hir_id);
-        let (article, desc) = cx.tcx.article_and_description(def_id);
+        let (article, desc) = cx.tcx.article_and_description(def_id.to_def_id());
 
         self.check_missing_docs_attrs(cx, Some(it.hir_id), &it.attrs, it.span, article, desc);
     }
@@ -469,7 +473,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MissingDoc {
         }
 
         let def_id = cx.tcx.hir().local_def_id(trait_item.hir_id);
-        let (article, desc) = cx.tcx.article_and_description(def_id);
+        let (article, desc) = cx.tcx.article_and_description(def_id.to_def_id());
 
         self.check_missing_docs_attrs(
             cx,
@@ -488,7 +492,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MissingDoc {
         }
 
         let def_id = cx.tcx.hir().local_def_id(impl_item.hir_id);
-        let (article, desc) = cx.tcx.article_and_description(def_id);
+        let (article, desc) = cx.tcx.article_and_description(def_id.to_def_id());
         self.check_missing_docs_attrs(
             cx,
             Some(impl_item.hir_id),
@@ -606,8 +610,8 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MissingDebugImplementations {
             let mut impls = HirIdSet::default();
             cx.tcx.for_each_impl(debug, |d| {
                 if let Some(ty_def) = cx.tcx.type_of(d).ty_adt_def() {
-                    if let Some(hir_id) = cx.tcx.hir().as_local_hir_id(ty_def.did) {
-                        impls.insert(hir_id);
+                    if let Some(def_id) = ty_def.did.as_local() {
+                        impls.insert(cx.tcx.hir().as_local_hir_id(def_id));
                     }
                 }
             });
@@ -1163,7 +1167,7 @@ declare_lint_pass!(
 );
 
 fn check_const(cx: &LateContext<'_, '_>, body_id: hir::BodyId) {
-    let def_id = cx.tcx.hir().body_owner_def_id(body_id);
+    let def_id = cx.tcx.hir().body_owner_def_id(body_id).to_def_id();
     // trigger the query once for all constants since that will already report the errors
     // FIXME: Use ensure here
     let _ = cx.tcx.const_eval_poly(def_id);
@@ -1351,7 +1355,7 @@ declare_lint! {
 }
 
 pub struct UnnameableTestItems {
-    boundary: hir::HirId, // HirId of the item under which things are not nameable
+    boundary: Option<hir::HirId>, // HirId of the item under which things are not nameable
     items_nameable: bool,
 }
 
@@ -1359,7 +1363,7 @@ impl_lint_pass!(UnnameableTestItems => [UNNAMEABLE_TEST_ITEMS]);
 
 impl UnnameableTestItems {
     pub fn new() -> Self {
-        Self { boundary: hir::DUMMY_HIR_ID, items_nameable: true }
+        Self { boundary: None, items_nameable: true }
     }
 }
 
@@ -1369,7 +1373,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnnameableTestItems {
             if let hir::ItemKind::Mod(..) = it.kind {
             } else {
                 self.items_nameable = false;
-                self.boundary = it.hir_id;
+                self.boundary = Some(it.hir_id);
             }
             return;
         }
@@ -1382,7 +1386,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnnameableTestItems {
     }
 
     fn check_item_post(&mut self, _cx: &LateContext<'_, '_>, it: &hir::Item<'_>) {
-        if !self.items_nameable && self.boundary == it.hir_id {
+        if !self.items_nameable && self.boundary == Some(it.hir_id) {
             self.items_nameable = true;
         }
     }
@@ -1528,7 +1532,8 @@ impl ExplicitOutlivesRequirements {
         inferred_outlives: &'tcx [(ty::Predicate<'tcx>, Span)],
         ty_generics: &'tcx ty::Generics,
     ) -> Vec<ty::Region<'tcx>> {
-        let index = ty_generics.param_def_id_to_index[&tcx.hir().local_def_id(param.hir_id)];
+        let index =
+            ty_generics.param_def_id_to_index[&tcx.hir().local_def_id(param.hir_id).to_def_id()];
 
         match param.kind {
             hir::GenericParamKind::Lifetime { .. } => {

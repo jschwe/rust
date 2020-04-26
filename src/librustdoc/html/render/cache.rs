@@ -294,10 +294,13 @@ impl DocFolder for Cache {
                             // for where the type was defined. On the other
                             // hand, `paths` always has the right
                             // information if present.
-                            Some(&(ref fqp, ItemType::Trait))
-                            | Some(&(ref fqp, ItemType::Struct))
-                            | Some(&(ref fqp, ItemType::Union))
-                            | Some(&(ref fqp, ItemType::Enum)) => Some(&fqp[..fqp.len() - 1]),
+                            Some(&(
+                                ref fqp,
+                                ItemType::Trait
+                                | ItemType::Struct
+                                | ItemType::Union
+                                | ItemType::Enum,
+                            )) => Some(&fqp[..fqp.len() - 1]),
                             Some(..) => Some(&*self.stack),
                             None => None,
                         };
@@ -631,7 +634,7 @@ fn build_index(krate: &clean::Crate, cache: &mut Cache) -> String {
 
     // Collect the index into a string
     format!(
-        r#"searchIndex["{}"] = {};"#,
+        r#""{}":{}"#,
         krate.name,
         serde_json::to_string(&CrateData {
             doc: crate_doc,
@@ -639,6 +642,11 @@ fn build_index(krate: &clean::Crate, cache: &mut Cache) -> String {
             paths: crate_paths,
         })
         .expect("failed serde conversion")
+        // All these `replace` calls are because we have to go through JS string for JSON content.
+        .replace(r"\", r"\\")
+        .replace("'", r"\'")
+        // We need to escape double quotes for the JSON.
+        .replace("\\\"", "\\\\\"")
     )
 }
 
@@ -697,11 +705,11 @@ fn get_generics(clean_type: &clean::Type) -> Option<Vec<Generic>> {
         let r = types
             .iter()
             .filter_map(|t| {
-                if let Some(name) = get_index_type_name(t, false) {
-                    Some(Generic { name: name.to_ascii_lowercase(), defid: t.def_id(), idx: None })
-                } else {
-                    None
-                }
+                get_index_type_name(t, false).map(|name| Generic {
+                    name: name.to_ascii_lowercase(),
+                    defid: t.def_id(),
+                    idx: None,
+                })
             })
             .collect::<Vec<_>>();
         if r.is_empty() { None } else { Some(r) }

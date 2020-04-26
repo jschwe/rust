@@ -791,6 +791,11 @@ impl<'a> Builder<'a> {
             rustflags.arg("--cfg=bootstrap");
         }
 
+        // FIXME: It might be better to use the same value for both `RUSTFLAGS` and `RUSTDOCFLAGS`,
+        // but this breaks CI. At the very least, stage0 `rustdoc` needs `--cfg bootstrap`. See
+        // #71458.
+        let rustdocflags = rustflags.clone();
+
         if let Ok(s) = env::var("CARGOFLAGS") {
             cargo.args(s.split_whitespace());
         }
@@ -969,27 +974,11 @@ impl<'a> Builder<'a> {
         // See https://github.com/rust-lang/rust/issues/68647.
         let can_use_lld = mode != Mode::Std;
 
-        // FIXME: The beta compiler doesn't pick the `lld-link` flavor for `*-pc-windows-msvc`
-        // Remove `RUSTC_HOST_LINKER_FLAVOR` when this is fixed
-        let lld_linker_flavor = |linker: &Path, target: Interned<String>| {
-            compiler.stage == 0
-                && linker.file_name() == Some(OsStr::new("rust-lld"))
-                && target.contains("pc-windows-msvc")
-        };
-
         if let Some(host_linker) = self.linker(compiler.host, can_use_lld) {
-            if lld_linker_flavor(host_linker, compiler.host) {
-                cargo.env("RUSTC_HOST_LINKER_FLAVOR", "lld-link");
-            }
-
             cargo.env("RUSTC_HOST_LINKER", host_linker);
         }
 
         if let Some(target_linker) = self.linker(target, can_use_lld) {
-            if lld_linker_flavor(target_linker, target) {
-                rustflags.arg("-Clinker-flavor=lld-link");
-            }
-
             let target = crate::envify(&target);
             cargo.env(&format!("CARGO_TARGET_{}_LINKER", target), target_linker);
         }
@@ -1099,6 +1088,13 @@ impl<'a> Builder<'a> {
 
             if self.config.deny_warnings {
                 rustflags.arg("-Dwarnings");
+
+                // FIXME(#58633) hide "unused attribute" errors in incremental
+                // builds of the standard library, as the underlying checks are
+                // not yet properly integrated with incremental recompilation.
+                if mode == Mode::Std && compiler.stage == 0 && self.config.incremental {
+                    rustflags.arg("-Aunused-attributes");
+                }
             }
         }
 
@@ -1278,7 +1274,7 @@ impl<'a> Builder<'a> {
             }
         }
 
-        Cargo { command: cargo, rustflags }
+        Cargo { command: cargo, rustflags, rustdocflags }
     }
 
     /// Ensure that a given step is built, returning its output. This will
@@ -1336,7 +1332,7 @@ impl<'a> Builder<'a> {
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Rustflags(String);
 
 impl Rustflags {
@@ -1376,6 +1372,7 @@ impl Rustflags {
 pub struct Cargo {
     command: Command,
     rustflags: Rustflags,
+    rustdocflags: Rustflags,
 }
 
 impl Cargo {
@@ -1408,7 +1405,16 @@ impl Cargo {
 
 impl From<Cargo> for Command {
     fn from(mut cargo: Cargo) -> Command {
-        cargo.command.env("RUSTFLAGS", &cargo.rustflags.0);
+        let rustflags = &cargo.rustflags.0;
+        if !rustflags.is_empty() {
+            cargo.command.env("RUSTFLAGS", rustflags);
+        }
+
+        let rustdocflags = &cargo.rustdocflags.0;
+        if !rustdocflags.is_empty() {
+            cargo.command.env("RUSTDOCFLAGS", rustdocflags);
+        }
+
         cargo.command
     }
 }

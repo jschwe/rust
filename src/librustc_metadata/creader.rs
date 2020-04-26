@@ -101,9 +101,15 @@ fn dump_crates(cstore: &CStore) {
         info!("  hash: {}", data.hash());
         info!("  reqd: {:?}", data.dep_kind());
         let CrateSource { dylib, rlib, rmeta } = data.source();
-        dylib.as_ref().map(|dl| info!("  dylib: {}", dl.0.display()));
-        rlib.as_ref().map(|rl| info!("   rlib: {}", rl.0.display()));
-        rmeta.as_ref().map(|rl| info!("   rmeta: {}", rl.0.display()));
+        if let Some(dylib) = dylib {
+            info!("  dylib: {}", dylib.0.display());
+        }
+        if let Some(rlib) = rlib {
+            info!("   rlib: {}", rlib.0.display());
+        }
+        if let Some(rmeta) = rmeta {
+            info!("   rmeta: {}", rmeta.0.display());
+        }
     });
 }
 
@@ -686,7 +692,9 @@ impl<'a> CrateLoader<'a> {
     }
 
     fn inject_profiler_runtime(&mut self) {
-        if self.sess.opts.debugging_opts.profile || self.sess.opts.cg.profile_generate.enabled() {
+        if (self.sess.opts.debugging_opts.profile || self.sess.opts.cg.profile_generate.enabled())
+            && !self.sess.opts.debugging_opts.no_profiler_runtime
+        {
             info!("loading profiler");
 
             let name = Symbol::intern("profiler_builtins");

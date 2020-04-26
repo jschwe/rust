@@ -375,9 +375,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for Canonicalizer<'cx, 'tcx> {
                 t,
             ),
 
-            ty::Infer(ty::FreshTy(_))
-            | ty::Infer(ty::FreshIntTy(_))
-            | ty::Infer(ty::FreshFloatTy(_)) => {
+            ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
                 bug!("encountered a fresh type during canonicalization")
             }
 
@@ -488,12 +486,12 @@ impl<'cx, 'tcx> Canonicalizer<'cx, 'tcx> {
         V: TypeFoldable<'tcx>,
     {
         let needs_canonical_flags = if canonicalize_region_mode.any() {
-            TypeFlags::KEEP_IN_LOCAL_TCX |
+            TypeFlags::NEEDS_INFER |
             TypeFlags::HAS_FREE_REGIONS | // `HAS_RE_PLACEHOLDER` implies `HAS_FREE_REGIONS`
             TypeFlags::HAS_TY_PLACEHOLDER |
             TypeFlags::HAS_CT_PLACEHOLDER
         } else {
-            TypeFlags::KEEP_IN_LOCAL_TCX
+            TypeFlags::NEEDS_INFER
                 | TypeFlags::HAS_RE_PLACEHOLDER
                 | TypeFlags::HAS_TY_PLACEHOLDER
                 | TypeFlags::HAS_CT_PLACEHOLDER
@@ -524,7 +522,7 @@ impl<'cx, 'tcx> Canonicalizer<'cx, 'tcx> {
         // Once we have canonicalized `out_value`, it should not
         // contain anything that ties it to this inference context
         // anymore, so it should live in the global arena.
-        debug_assert!(!out_value.has_type_flags(TypeFlags::KEEP_IN_LOCAL_TCX));
+        debug_assert!(!out_value.needs_infer());
 
         let canonical_variables = tcx.intern_canonical_var_infos(&canonicalizer.variables);
 

@@ -743,7 +743,7 @@ impl<'a> Parser<'a> {
 
     /// Parses a `UseTree`.
     ///
-    /// ```
+    /// ```text
     /// USE_TREE = [`::`] `*` |
     ///            [`::`] `{` USE_TREE_LIST `}` |
     ///            PATH `::` `*` |
@@ -792,7 +792,7 @@ impl<'a> Parser<'a> {
 
     /// Parses a `UseTreeKind::Nested(list)`.
     ///
-    /// ```
+    /// ```text
     /// USE_TREE_LIST = Ø | (USE_TREE `,`)* USE_TREE [`,`]
     /// ```
     fn parse_use_tree_list(&mut self) -> PResult<'a, Vec<(UseTree, ast::NodeId)>> {
@@ -1650,7 +1650,7 @@ impl<'a> Parser<'a> {
                 // Recover from attempting to parse the argument as a type without pattern.
                 Err(mut err) => {
                     err.cancel();
-                    mem::replace(self, parser_snapshot_before_ty);
+                    *self = parser_snapshot_before_ty;
                     self.recover_arg_parse()?
                 }
             }

@@ -617,10 +617,6 @@ impl Options {
 }
 
 impl DebuggingOptions {
-    pub fn ui_testing(&self) -> bool {
-        self.ui_testing.unwrap_or(false)
-    }
-
     pub fn diagnostic_handler_flags(&self, can_emit_warnings: bool) -> HandlerFlags {
         HandlerFlags {
             can_emit_warnings,
@@ -628,7 +624,7 @@ impl DebuggingOptions {
             dont_buffer_diagnostics: self.dont_buffer_diagnostics,
             report_delayed_bugs: self.report_delayed_bugs,
             macro_backtrace: self.macro_backtrace,
-            deduplicate_diagnostics: self.deduplicate_diagnostics.unwrap_or(true),
+            deduplicate_diagnostics: self.deduplicate_diagnostics,
         }
     }
 }
@@ -1017,7 +1013,15 @@ pub fn get_cmd_lint_options(
     let mut describe_lints = false;
 
     for &level in &[lint::Allow, lint::Warn, lint::Deny, lint::Forbid] {
-        for (arg_pos, lint_name) in matches.opt_strs_pos(level.as_str()) {
+        for (passed_arg_pos, lint_name) in matches.opt_strs_pos(level.as_str()) {
+            let arg_pos = if let lint::Forbid = level {
+                // HACK: forbid is always specified last, so it can't be overridden.
+                // FIXME: remove this once <https://github.com/rust-lang/rust/issues/70819> is
+                // fixed and `forbid` works as expected.
+                usize::max_value()
+            } else {
+                passed_arg_pos
+            };
             if lint_name == "help" {
                 describe_lints = true;
             } else {
@@ -1387,15 +1391,14 @@ fn parse_opt_level(
     if max_o > max_c {
         OptLevel::Default
     } else {
-        match cg.opt_level.as_ref().map(String::as_ref) {
-            None => OptLevel::No,
-            Some("0") => OptLevel::No,
-            Some("1") => OptLevel::Less,
-            Some("2") => OptLevel::Default,
-            Some("3") => OptLevel::Aggressive,
-            Some("s") => OptLevel::Size,
-            Some("z") => OptLevel::SizeMin,
-            Some(arg) => {
+        match cg.opt_level.as_ref() {
+            "0" => OptLevel::No,
+            "1" => OptLevel::Less,
+            "2" => OptLevel::Default,
+            "3" => OptLevel::Aggressive,
+            "s" => OptLevel::Size,
+            "z" => OptLevel::SizeMin,
+            arg => {
                 early_error(
                     error_format,
                     &format!(
@@ -1428,10 +1431,10 @@ fn select_debuginfo(
         DebugInfo::Full
     } else {
         match cg.debuginfo {
-            None | Some(0) => DebugInfo::None,
-            Some(1) => DebugInfo::Limited,
-            Some(2) => DebugInfo::Full,
-            Some(arg) => {
+            0 => DebugInfo::None,
+            1 => DebugInfo::Limited,
+            2 => DebugInfo::Full,
+            arg => {
                 early_error(
                     error_format,
                     &format!(
@@ -1494,10 +1497,10 @@ fn parse_libs(
 }
 
 fn parse_borrowck_mode(dopts: &DebuggingOptions, error_format: ErrorOutputType) -> BorrowckMode {
-    match dopts.borrowck.as_ref().map(|s| &s[..]) {
-        None | Some("migrate") => BorrowckMode::Migrate,
-        Some("mir") => BorrowckMode::Mir,
-        Some(m) => early_error(error_format, &format!("unknown borrowck mode `{}`", m)),
+    match dopts.borrowck.as_ref() {
+        "migrate" => BorrowckMode::Migrate,
+        "mir" => BorrowckMode::Mir,
+        m => early_error(error_format, &format!("unknown borrowck mode `{}`", m)),
     }
 }
 
@@ -1647,7 +1650,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     let output_types = parse_output_types(&debugging_opts, matches, error_format);
 
     let mut cg = build_codegen_options(matches, error_format);
-    let (disable_thinlto, codegen_units) = should_override_cgus_and_disable_thinlto(
+    let (disable_thinlto, mut codegen_units) = should_override_cgus_and_disable_thinlto(
         &output_types,
         matches,
         error_format,
@@ -1664,12 +1667,32 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
             "can't instrument with gcov profiling when compiling incrementally",
         );
     }
+    if debugging_opts.profile {
+        match codegen_units {
+            Some(1) => {}
+            None => codegen_units = Some(1),
+            Some(_) => early_error(
+                error_format,
+                "can't instrument with gcov profiling with multiple codegen units",
+            ),
+        }
+    }
 
     if cg.profile_generate.enabled() && cg.profile_use.is_some() {
         early_error(
             error_format,
             "options `-C profile-generate` and `-C profile-use` are exclusive",
         );
+    }
+
+    if !cg.bitcode_in_rlib {
+        match cg.lto {
+            LtoCli::No | LtoCli::Unspecified => {}
+            LtoCli::Yes | LtoCli::NoParam | LtoCli::Thin | LtoCli::Fat => early_error(
+                error_format,
+                "options `-C bitcode-in-rlib=no` and `-C lto` are incompatible",
+            ),
+        }
     }
 
     let prints = collect_print_requests(&mut cg, &mut debugging_opts, matches, error_format);
@@ -1934,11 +1957,9 @@ impl PpMode {
         use PpMode::*;
         use PpSourceMode::*;
         match *self {
-            PpmSource(PpmNormal) | PpmSource(PpmEveryBodyLoops) | PpmSource(PpmIdentified) => false,
+            PpmSource(PpmNormal | PpmEveryBodyLoops | PpmIdentified) => false,
 
-            PpmSource(PpmExpanded)
-            | PpmSource(PpmExpandedIdentified)
-            | PpmSource(PpmExpandedHygiene)
+            PpmSource(PpmExpanded | PpmExpandedIdentified | PpmExpandedHygiene)
             | PpmHir(_)
             | PpmHirTree(_)
             | PpmMir

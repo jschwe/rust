@@ -109,7 +109,8 @@ pub fn configure_and_expand(
     // its contents but the results of name resolution on those contents. Hopefully we'll push
     // this back at some point.
     let crate_name = crate_name.to_string();
-    let (result, resolver) = BoxedResolver::new(static move || {
+    let (result, resolver) = BoxedResolver::new(static move |mut action| {
+        let _ = action;
         let sess = &*sess;
         let resolver_arenas = Resolver::arenas();
         let res = configure_and_expand_inner(
@@ -126,11 +127,11 @@ pub fn configure_and_expand(
                 panic!()
             }
             Ok((krate, resolver)) => {
-                yield BoxedResolver::initial_yield(Ok(krate));
+                action = yield BoxedResolver::initial_yield(Ok(krate));
                 resolver
             }
         };
-        box_region_allow_access!(for(), (&mut Resolver<'_>), (&mut resolver));
+        box_region_allow_access!(for(), (&mut Resolver<'_>), (&mut resolver), action);
         resolver.into_outputs()
     });
     result.map(|k| (k, resolver))
@@ -812,7 +813,7 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
             {
                 sess.time("match_checking", || {
                     tcx.par_body_owners(|def_id| {
-                        tcx.ensure().check_match(def_id);
+                        tcx.ensure().check_match(def_id.to_def_id());
                     });
                 });
             },
@@ -834,7 +835,7 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
     });
 
     sess.time("MIR_borrow_checking", || {
-        tcx.par_body_owners(|def_id| tcx.ensure().mir_borrowck(def_id));
+        tcx.par_body_owners(|def_id| tcx.ensure().mir_borrowck(def_id.to_def_id()));
     });
 
     sess.time("dumping_chalk_like_clauses", || {
@@ -843,7 +844,7 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
 
     sess.time("MIR_effect_checking", || {
         for def_id in tcx.body_owners() {
-            mir::transform::check_unsafety::check_unsafety(tcx, def_id)
+            mir::transform::check_unsafety::check_unsafety(tcx, def_id.to_def_id())
         }
     });
 

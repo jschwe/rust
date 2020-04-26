@@ -15,17 +15,17 @@ macro_rules! arena_types {
             [] generics: rustc_middle::ty::Generics,
             [] trait_def: rustc_middle::ty::TraitDef,
             [] adt_def: rustc_middle::ty::AdtDef,
-            [] steal_mir: rustc_middle::ty::steal::Steal<rustc_middle::mir::BodyAndCache<$tcx>>,
-            [] mir: rustc_middle::mir::BodyAndCache<$tcx>,
+            [] steal_mir: rustc_middle::ty::steal::Steal<rustc_middle::mir::Body<$tcx>>,
+            [] mir: rustc_middle::mir::Body<$tcx>,
             [] steal_promoted: rustc_middle::ty::steal::Steal<
                 rustc_index::vec::IndexVec<
                     rustc_middle::mir::Promoted,
-                    rustc_middle::mir::BodyAndCache<$tcx>
+                    rustc_middle::mir::Body<$tcx>
                 >
             >,
             [] promoted: rustc_index::vec::IndexVec<
                 rustc_middle::mir::Promoted,
-                rustc_middle::mir::BodyAndCache<$tcx>
+                rustc_middle::mir::Body<$tcx>
             >,
             [decode] tables: rustc_middle::ty::TypeckTables<$tcx>,
             [decode] borrowck_result: rustc_middle::mir::BorrowCheckResult<$tcx>,
@@ -116,6 +116,11 @@ macro_rules! arena_types {
             [few] crate_variances: rustc_middle::ty::CrateVariancesMap<'tcx>,
             [few] inferred_outlives_crate: rustc_middle::ty::CratePredicatesMap<'tcx>,
             [] upvars: rustc_data_structures::fx::FxIndexMap<rustc_hir::HirId, rustc_hir::Upvar>,
+            [] object_safety_violations: rustc_middle::traits::ObjectSafetyViolation,
+            [] codegen_unit: rustc_middle::mir::mono::CodegenUnit<$tcx>,
+            [] attribute: rustc_ast::ast::Attribute,
+            [] name_set: rustc_data_structures::fx::FxHashSet<rustc_ast::ast::Name>,
+            [] hir_id_set: rustc_hir::HirIdSet,
 
             // Interned types
             [] tys: rustc_middle::ty::TyS<$tcx>,

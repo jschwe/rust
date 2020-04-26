@@ -171,11 +171,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ///
     /// Given a method call like `foo.bar::<T1,...Tn>(...)`:
     ///
-    /// * `fcx`:                   the surrounding `FnCtxt` (!)
-    /// * `span`:                  the span for the method call
-    /// * `method_name`:           the name of the method being called (`bar`)
+    /// * `self`:                  the surrounding `FnCtxt` (!)
     /// * `self_ty`:               the (unadjusted) type of the self expression (`foo`)
-    /// * `supplied_method_types`: the explicit method type parameters, if any (`T1..Tn`)
+    /// * `segment`:               the name and generic arguments of the method (`bar::<T1, ...Tn>`)
+    /// * `span`:                  the span for the method call
+    /// * `call_expr`:             the complete method call: (`foo.bar::<T1,...Tn>(...)`)
     /// * `self_expr`:             the self expression (`foo`)
     pub fn lookup_method(
         &self,
@@ -198,7 +198,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             debug!("used_trait_import: {:?}", import_def_id);
             Lrc::get_mut(&mut self.tables.borrow_mut().used_trait_imports)
                 .unwrap()
-                .insert(import_def_id);
+                .insert(import_def_id.to_def_id());
         }
 
         self.tcx.check_stability(pick.item.def_id, Some(call_expr.hir_id), span);
@@ -463,11 +463,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             for import_id in pick.import_ids {
                 let import_def_id = tcx.hir().local_def_id(import_id);
                 debug!("resolve_ufcs: used_trait_import: {:?}", import_def_id);
-                used_trait_imports.insert(import_def_id);
+                used_trait_imports.insert(import_def_id.to_def_id());
             }
         }
 
-        let def_kind = pick.item.def_kind();
+        let def_kind = pick.item.kind.as_def_kind();
         debug!("resolve_ufcs: def_kind={:?}, def_id={:?}", def_kind, pick.item.def_id);
         tcx.check_stability(pick.item.def_id, Some(expr_id), span);
         Ok((def_kind, pick.item.def_id))

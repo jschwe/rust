@@ -14,6 +14,7 @@
 #![feature(crate_visibility_modifier)]
 #![feature(label_break_value)]
 #![feature(nll)]
+#![feature(or_patterns)]
 #![feature(try_trait)]
 #![feature(unicode_internals)]
 #![recursion_limit = "256"]
@@ -33,7 +34,6 @@ pub mod util {
     pub mod comments;
     pub mod lev_distance;
     pub mod literal;
-    pub mod map_in_place;
     pub mod parser;
 }
 

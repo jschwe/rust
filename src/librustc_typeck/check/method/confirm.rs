@@ -209,7 +209,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                     "impl {:?} is not an inherent impl",
                     impl_def_id
                 );
-                self.impl_self_ty(self.span, impl_def_id).substs
+                self.fresh_substs_for_item(self.span, impl_def_id)
             }
 
             probe::ObjectPick => {
@@ -269,7 +269,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         self.fcx
             .autoderef(self.span, self_ty)
             .include_raw_pointers()
-            .filter_map(|(ty, _)| match ty.kind {
+            .find_map(|(ty, _)| match ty.kind {
                 ty::Dynamic(ref data, ..) => Some(closure(
                     self,
                     ty,
@@ -279,7 +279,6 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                 )),
                 _ => None,
             })
-            .next()
             .unwrap_or_else(|| {
                 span_bug!(
                     self.span,
@@ -573,24 +572,24 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         };
 
         traits::elaborate_predicates(self.tcx, predicates.predicates.clone())
-            .filter_map(|predicate| match predicate {
+            .filter_map(|obligation| match obligation.predicate {
                 ty::Predicate::Trait(trait_pred, _) if trait_pred.def_id() == sized_def_id => {
                     let span = predicates
                         .predicates
                         .iter()
                         .zip(predicates.spans.iter())
-                        .filter_map(|(p, span)| if *p == predicate { Some(*span) } else { None })
-                        .next()
+                        .find_map(
+                            |(p, span)| if *p == obligation.predicate { Some(*span) } else { None },
+                        )
                         .unwrap_or(rustc_span::DUMMY_SP);
                     Some((trait_pred, span))
                 }
                 _ => None,
             })
-            .filter_map(|(trait_pred, span)| match trait_pred.skip_binder().self_ty().kind {
+            .find_map(|(trait_pred, span)| match trait_pred.skip_binder().self_ty().kind {
                 ty::Dynamic(..) => Some(span),
                 _ => None,
             })
-            .next()
     }
 
     fn enforce_illegal_method_limitations(&self, pick: &probe::Pick<'_>) {

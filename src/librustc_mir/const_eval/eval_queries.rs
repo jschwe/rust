@@ -1,7 +1,7 @@
 use super::{error_to_const_error, CompileTimeEvalContext, CompileTimeInterpreter, MemoryExtra};
 use crate::interpret::eval_nullary_intrinsic;
 use crate::interpret::{
-    intern_const_alloc_recursive, Allocation, ConstValue, GlobalId, ImmTy, Immediate, InternKind,
+    intern_const_alloc_recursive, Allocation, ConstValue, GlobalId, Immediate, InternKind,
     InterpCx, InterpResult, MPlaceTy, MemoryKind, OpTy, RawConst, RefTracking, Scalar,
     ScalarMaybeUndef, StackPopCleanup,
 };
@@ -147,25 +147,28 @@ pub(super) fn op_to_const<'tcx>(
     match immediate {
         Ok(mplace) => to_const_value(mplace),
         // see comment on `let try_as_immediate` above
-        Err(ImmTy { imm: Immediate::Scalar(x), .. }) => match x {
-            ScalarMaybeUndef::Scalar(s) => ConstValue::Scalar(s),
-            ScalarMaybeUndef::Undef => to_const_value(op.assert_mem_place(ecx)),
+        Err(imm) => match *imm {
+            Immediate::Scalar(x) => match x {
+                ScalarMaybeUndef::Scalar(s) => ConstValue::Scalar(s),
+                ScalarMaybeUndef::Undef => to_const_value(op.assert_mem_place(ecx)),
+            },
+            Immediate::ScalarPair(a, b) => {
+                let (data, start) = match a.not_undef().unwrap() {
+                    Scalar::Ptr(ptr) => {
+                        (ecx.tcx.alloc_map.lock().unwrap_memory(ptr.alloc_id), ptr.offset.bytes())
+                    }
+                    Scalar::Raw { .. } => (
+                        ecx.tcx
+                            .intern_const_alloc(Allocation::from_byte_aligned_bytes(b"" as &[u8])),
+                        0,
+                    ),
+                };
+                let len = b.to_machine_usize(&ecx.tcx.tcx).unwrap();
+                let start = start.try_into().unwrap();
+                let len: usize = len.try_into().unwrap();
+                ConstValue::Slice { data, start, end: start + len }
+            }
         },
-        Err(ImmTy { imm: Immediate::ScalarPair(a, b), .. }) => {
-            let (data, start) = match a.not_undef().unwrap() {
-                Scalar::Ptr(ptr) => {
-                    (ecx.tcx.alloc_map.lock().unwrap_memory(ptr.alloc_id), ptr.offset.bytes())
-                }
-                Scalar::Raw { .. } => (
-                    ecx.tcx.intern_const_alloc(Allocation::from_byte_aligned_bytes(b"" as &[u8])),
-                    0,
-                ),
-            };
-            let len = b.to_machine_usize(&ecx.tcx.tcx).unwrap();
-            let start = start.try_into().unwrap();
-            let len: usize = len.try_into().unwrap();
-            ConstValue::Slice { data, start, end: start + len }
-        }
     }
 }
 
@@ -210,13 +213,10 @@ fn validate_and_turn_into_const<'tcx>(
 
     val.map_err(|error| {
         let err = error_to_const_error(&ecx, error);
-        match err.struct_error(ecx.tcx, "it is undefined behavior to use this value", |mut diag| {
+        err.struct_error(ecx.tcx, "it is undefined behavior to use this value", |mut diag| {
             diag.note(note_on_undefined_behavior_error());
             diag.emit();
-        }) {
-            Ok(_) => ErrorHandled::Reported,
-            Err(err) => err,
-        }
+        })
     })
 }
 
@@ -289,11 +289,10 @@ pub fn const_eval_raw_provider<'tcx>(
     let cid = key.value;
     let def_id = cid.instance.def.def_id();
 
-    if def_id.is_local()
-        && tcx.has_typeck_tables(def_id)
-        && tcx.typeck_tables_of(def_id).tainted_by_errors
-    {
-        return Err(ErrorHandled::Reported);
+    if def_id.is_local() && tcx.has_typeck_tables(def_id) {
+        if let Some(error_reported) = tcx.typeck_tables_of(def_id).tainted_by_errors {
+            return Err(ErrorHandled::Reported(error_reported));
+        }
     }
 
     let is_static = tcx.is_static(def_id);
@@ -342,8 +341,8 @@ pub fn const_eval_raw_provider<'tcx>(
                     // because any code that existed before validation could not have failed
                     // validation thus preventing such a hard error from being a backwards
                     // compatibility hazard
-                    Some(DefKind::Const) | Some(DefKind::AssocConst) => {
-                        let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
+                    DefKind::Const | DefKind::AssocConst => {
+                        let hir_id = tcx.hir().as_local_hir_id(def_id.expect_local());
                         err.report_as_lint(
                             tcx.at(tcx.def_span(def_id)),
                             "any use of this value will cause an error",
@@ -366,7 +365,7 @@ pub fn const_eval_raw_provider<'tcx>(
                                 err.report_as_lint(
                                     tcx.at(span),
                                     "reaching this expression at runtime will panic or abort",
-                                    tcx.hir().as_local_hir_id(def_id).unwrap(),
+                                    tcx.hir().as_local_hir_id(def_id.expect_local()),
                                     Some(err.span),
                                 )
                             }

@@ -8,9 +8,6 @@
 #![feature(nll)]
 #![recursion_limit = "256"]
 
-pub extern crate getopts;
-#[cfg(unix)]
-extern crate libc;
 #[macro_use]
 extern crate log;
 #[macro_use]
@@ -37,6 +34,7 @@ use rustc_save_analysis::DumpHandler;
 use rustc_serialize::json::{self, ToJson};
 use rustc_session::config::nightly_options;
 use rustc_session::config::{ErrorOutputType, Input, OutputType, PrintRequest};
+use rustc_session::getopts;
 use rustc_session::lint::{Lint, LintId};
 use rustc_session::{config, DiagnosticOutput, Session};
 use rustc_session::{early_error, early_warn};
@@ -957,32 +955,17 @@ fn describe_codegen_flags() {
 
 fn print_flag_list<T>(
     cmdline_opt: &str,
-    flag_list: &[(&'static str, T, Option<&'static str>, &'static str)],
+    flag_list: &[(&'static str, T, &'static str, &'static str)],
 ) {
-    let max_len = flag_list
-        .iter()
-        .map(|&(name, _, opt_type_desc, _)| {
-            let extra_len = match opt_type_desc {
-                Some(..) => 4,
-                None => 0,
-            };
-            name.chars().count() + extra_len
-        })
-        .max()
-        .unwrap_or(0);
+    let max_len = flag_list.iter().map(|&(name, _, _, _)| name.chars().count()).max().unwrap_or(0);
 
-    for &(name, _, opt_type_desc, desc) in flag_list {
-        let (width, extra) = match opt_type_desc {
-            Some(..) => (max_len - 4, "=val"),
-            None => (max_len, ""),
-        };
+    for &(name, _, _, desc) in flag_list {
         println!(
-            "    {} {:>width$}{} -- {}",
+            "    {} {:>width$}=val -- {}",
             cmdline_opt,
             name.replace("_", "-"),
-            extra,
             desc,
-            width = width
+            width = max_len
         );
     }
 }

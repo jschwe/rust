@@ -109,7 +109,7 @@ macro_rules! ignore_err {
 
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     pub fn regionck_expr(&self, body: &'tcx hir::Body<'tcx>) {
-        let subject = self.tcx.hir().body_owner_def_id(body.id());
+        let subject = self.tcx.hir().body_owner_def_id(body.id()).to_def_id();
         let id = body.value.hir_id;
         let mut rcx =
             RegionCtxt::new(self, RepeatingScope(id), id, Subject(subject), self.param_env);
@@ -135,7 +135,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self,
             RepeatingScope(item_id),
             item_id,
-            Subject(subject),
+            Subject(subject.to_def_id()),
             self.param_env,
         );
         rcx.outlives_environment.add_implied_bounds(self, wf_tys, item_id, span);
@@ -154,7 +154,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// constraints to add.
     pub fn regionck_fn(&self, fn_id: hir::HirId, body: &'tcx hir::Body<'tcx>) {
         debug!("regionck_fn(id={})", fn_id);
-        let subject = self.tcx.hir().body_owner_def_id(body.id());
+        let subject = self.tcx.hir().body_owner_def_id(body.id()).to_def_id();
         let hir_id = body.value.hir_id;
         let mut rcx =
             RegionCtxt::new(self, RepeatingScope(hir_id), hir_id, Subject(subject), self.param_env);
@@ -290,7 +290,7 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
 
         let body_id = body.id();
         self.body_id = body_id.hir_id;
-        self.body_owner = self.tcx.hir().body_owner_def_id(body_id);
+        self.body_owner = self.tcx.hir().body_owner_def_id(body_id).to_def_id();
 
         let call_site =
             region::Scope { id: body.value.hir_id.local_id, data: region::ScopeData::CallSite };
@@ -1230,7 +1230,7 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
         // reference to the closure.
         if let ty::Closure(_, substs) = ty.kind {
             match self.infcx.closure_kind(substs) {
-                Some(ty::ClosureKind::Fn) | Some(ty::ClosureKind::FnMut) => {
+                Some(ty::ClosureKind::Fn | ty::ClosureKind::FnMut) => {
                     // Region of environment pointer
                     let env_region = self.tcx.mk_region(ty::ReFree(ty::FreeRegion {
                         scope: upvar_id.closure_expr_id.to_def_id(),
