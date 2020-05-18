@@ -74,6 +74,7 @@ static mut ENV: Option<Mutex<HashMap<OsString, OsString>>> = None;
 
 pub fn init_environment(env: *const *const i8) {
     unsafe {
+        assert!(!ENV.is_some(), "init_environment should not be called twice");
         ENV = Some(Mutex::new(HashMap::new()));
 
         if env.is_null() {
@@ -126,6 +127,7 @@ impl Iterator for Env {
 /// Returns a vector of (variable, value) byte-vector pairs for all the
 /// environment variables of the current process.
 pub fn env() -> Env {
+    ///ToDo - Can the return be changed to an option? Alternattively return an empty iterator?
     unsafe {
         let guard = ENV.as_ref().unwrap().lock().unwrap();
         let mut result = Vec::new();
@@ -140,7 +142,13 @@ pub fn env() -> Env {
 
 pub fn getenv(k: &OsStr) -> io::Result<Option<OsString>> {
     unsafe {
-        match ENV.as_ref().unwrap().lock().unwrap().get_mut(k) {
+        if !ENV.is_some() {
+            return std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Environment not initialized",
+            );
+        }
+        match ENV.as_ref().unwrap().lock().unwrap() {
             Some(value) => Ok(Some(value.clone())),
             None => Ok(None),
         }
@@ -149,17 +157,32 @@ pub fn getenv(k: &OsStr) -> io::Result<Option<OsString>> {
 
 pub fn setenv(k: &OsStr, v: &OsStr) -> io::Result<()> {
     unsafe {
+        if !ENV.is_some() {
+            return std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Environment not initialized",
+            );
+        }
         let (k, v) = (k.to_owned(), v.to_owned());
         ENV.as_ref().unwrap().lock().unwrap().insert(k, v);
+
+        Ok(())
     }
-    Ok(())
 }
 
 pub fn unsetenv(k: &OsStr) -> io::Result<()> {
     unsafe {
+        if !ENV.is_some() {
+            return std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Environment not initialized",
+            );
+        }
+
         ENV.as_ref().unwrap().lock().unwrap().remove(k);
+
+        Ok(())
     }
-    Ok(())
 }
 
 pub fn temp_dir() -> PathBuf {
