@@ -1,0 +1,66 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+# Triggers for pushes to all branches and all PRs
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+name: $(Date:yyyyMMdd)$(Rev:.r)
+resources:
+ repositories:
+   - repository: "rusty_hermit"
+     type: github
+     name: hermitcore/rusty-hermit
+     ref: refs/heads/devel
+     endpoint: jschwe
+
+steps:
+# Don't checkout submodules of rust compiler to save time (llvm is big)
+# The x.py script will checkout the things it needs
+- checkout: self
+  submodules: false
+- checkout: rusty_hermit
+  submodules: true
+- script: |
+    wget https://apt.llvm.org/llvm.sh
+    chmod +x llvm.sh
+    sudo ./llvm.sh 9
+  displayName: 'Install LLVM'
+- script: |
+    sudo apt-get install -y clang-10 lldb-10 lld-10 clangd-10 llvm-10-tools
+    sudo apt-get install -y qemu-kvm qemu-system-x86 nasm
+    sudo apt-get install -y git build-essential curl pkg-config libssl-dev python libz-dev
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly -y
+    rustup default nightly
+    rustup component add rust-src
+    rustup component add llvm-tools-preview
+  displayName: 'Install dependencies'
+- script: |
+    printf "[target.x86_64-unknown-linux-gnu]\nllvm-config = \"/usr/lib/llvm-10/bin/llvm-config\"\n" > rust/config.toml
+    cat rust/config.toml
+  displayName: 'Configure rust to use prebuilt LLVM'
+- script: rust/x.py build
+  displayName: 'Build rust compiler'
+  continueOnError: false
+- script: rustup toolchain link stage2 rust/build/x86_64-unknown-linux-gnu/stage2
+- script: RUSTUP_TOOLCHAIN=stage2 RUSTFLAGS="-C linker=../rust/build/x86_64-unknown-linux-gnu/stage0/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld" cargo build -Z build-std=std,core,alloc,panic_abort --target x86_64-unknown-hermit
+  workingDirectory: rusty-hermit
+  displayName: 'Debug build of rusty_hermit'
+- script: RUSTUP_TOOLCHAIN=stage2 RUSTFLAGS="-C linker=../rust/build/x86_64-unknown-linux-gnu/stage0/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld" cargo build -Z build-std=std,core,alloc,panic_abort --target x86_64-unknown-hermit --release
+  workingDirectory: rusty-hermit
+  displayName: 'Debug build of rusty_hermit'
+- script: make
+  workingDirectory: rusty-hermit/loader
+  displayName: 'Build rusty-hermit loader'
+# Begin of the Testing section
+- script: qemu-system-x86_64 -display none -smp 1 -m 64M -serial stdio -kernel loader/target/x86_64-unknown-hermit-loader/debug/rusty-loader -initrd target/x86_64-unknown-hermit/debug/rusty_demo -cpu qemu64,apic,fsgsbase,rdtscp,xsave,fxsr,rdrand
+  displayName: 'rusty-hermit 1Core-64MB-debug'
+
+
+- script: |
+    echo Add other tasks to build, test, and deploy your project.
+    echo See https://aka.ms/yaml
+  displayName: 'Run a multi-line script'
