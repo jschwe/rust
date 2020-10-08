@@ -1,7 +1,7 @@
 //! The Rust AST Visitor. Extracts useful information and massages it into a form
 //! usable for `clean`.
 
-use rustc_ast::ast;
+use rustc_ast as ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
@@ -11,7 +11,7 @@ use rustc_middle::middle::privacy::AccessLevel;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::Spanned;
-use rustc_span::symbol::{kw, sym};
+use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{self, Span};
 
 use std::mem;
@@ -62,7 +62,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         self.exact_paths.entry(did).or_insert_with(|| def_id_to_path(tcx, did));
     }
 
-    pub fn visit(mut self, krate: &'tcx hir::Crate) -> Module<'tcx> {
+    pub fn visit(mut self, krate: &'tcx hir::Crate<'_>) -> Module<'tcx> {
         let mut module = self.visit_mod_contents(
             krate.item.span,
             krate.item.attrs,
@@ -84,10 +84,10 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
 
     fn visit_variant_data(
         &mut self,
-        item: &'tcx hir::Item,
-        name: ast::Name,
-        sd: &'tcx hir::VariantData,
-        generics: &'tcx hir::Generics,
+        item: &'tcx hir::Item<'_>,
+        name: Symbol,
+        sd: &'tcx hir::VariantData<'_>,
+        generics: &'tcx hir::Generics<'_>,
     ) -> Struct<'tcx> {
         debug!("visiting struct");
         let struct_type = struct_type_from_def(&*sd);
@@ -99,16 +99,16 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             attrs: &item.attrs,
             generics,
             fields: sd.fields(),
-            whence: item.span,
+            span: item.span,
         }
     }
 
     fn visit_union_data(
         &mut self,
-        item: &'tcx hir::Item,
-        name: ast::Name,
-        sd: &'tcx hir::VariantData,
-        generics: &'tcx hir::Generics,
+        item: &'tcx hir::Item<'_>,
+        name: Symbol,
+        sd: &'tcx hir::VariantData<'_>,
+        generics: &'tcx hir::Generics<'_>,
     ) -> Union<'tcx> {
         debug!("visiting union");
         let struct_type = struct_type_from_def(&*sd);
@@ -120,16 +120,16 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             attrs: &item.attrs,
             generics,
             fields: sd.fields(),
-            whence: item.span,
+            span: item.span,
         }
     }
 
     fn visit_enum_def(
         &mut self,
-        it: &'tcx hir::Item,
-        name: ast::Name,
-        def: &'tcx hir::EnumDef,
-        generics: &'tcx hir::Generics,
+        it: &'tcx hir::Item<'_>,
+        name: Symbol,
+        def: &'tcx hir::EnumDef<'_>,
+        generics: &'tcx hir::Generics<'_>,
     ) -> Enum<'tcx> {
         debug!("visiting enum");
         Enum {
@@ -142,34 +142,34 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     id: v.id,
                     attrs: &v.attrs,
                     def: &v.data,
-                    whence: v.span,
+                    span: v.span,
                 })
                 .collect(),
             vis: &it.vis,
             generics,
             attrs: &it.attrs,
             id: it.hir_id,
-            whence: it.span,
+            span: it.span,
         }
     }
 
     fn visit_fn(
         &mut self,
         om: &mut Module<'tcx>,
-        item: &'tcx hir::Item,
-        name: ast::Name,
-        decl: &'tcx hir::FnDecl,
+        item: &'tcx hir::Item<'_>,
+        name: Symbol,
+        decl: &'tcx hir::FnDecl<'_>,
         header: hir::FnHeader,
-        generics: &'tcx hir::Generics,
+        generics: &'tcx hir::Generics<'_>,
         body: hir::BodyId,
     ) {
         debug!("visiting fn");
         let macro_kind = item.attrs.iter().find_map(|a| {
-            if a.check_name(sym::proc_macro) {
+            if a.has_name(sym::proc_macro) {
                 Some(MacroKind::Bang)
-            } else if a.check_name(sym::proc_macro_derive) {
+            } else if a.has_name(sym::proc_macro_derive) {
                 Some(MacroKind::Derive)
-            } else if a.check_name(sym::proc_macro_attribute) {
+            } else if a.has_name(sym::proc_macro_attribute) {
                 Some(MacroKind::Attr)
             } else {
                 None
@@ -189,7 +189,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
 
                 let mut helpers = Vec::new();
                 for mi in item.attrs.lists(sym::proc_macro_derive) {
-                    if !mi.check_name(sym::attributes) {
+                    if !mi.has_name(sym::attributes) {
                         continue;
                     }
 
@@ -208,7 +208,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     kind,
                     helpers,
                     attrs: &item.attrs,
-                    whence: item.span,
+                    span: item.span,
                 });
             }
             None => {
@@ -218,7 +218,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     attrs: &item.attrs,
                     decl,
                     name,
-                    whence: item.span,
+                    span: item.span,
                     generics,
                     header,
                     body,
@@ -231,10 +231,10 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         &mut self,
         span: Span,
         attrs: &'tcx [ast::Attribute],
-        vis: &'tcx hir::Visibility,
+        vis: &'tcx hir::Visibility<'_>,
         id: hir::HirId,
         m: &'tcx hir::Mod<'tcx>,
-        name: Option<ast::Name>,
+        name: Option<Symbol>,
     ) -> Module<'tcx> {
         let mut om = Module::new(name, attrs, vis);
         om.where_outer = span;
@@ -264,7 +264,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         &mut self,
         id: hir::HirId,
         res: Res,
-        renamed: Option<ast::Ident>,
+        renamed: Option<Ident>,
         glob: bool,
         om: &mut Module<'tcx>,
         please_inline: bool,
@@ -303,31 +303,27 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         if !res_did.is_local() && !is_no_inline {
             let attrs = clean::inline::load_attrs(self.cx, res_did);
             let self_is_hidden = attrs.lists(sym::doc).has_word(sym::hidden);
-            match res {
-                Res::Def(
-                    DefKind::Trait
-                    | DefKind::Struct
-                    | DefKind::Union
-                    | DefKind::Enum
-                    | DefKind::ForeignTy
-                    | DefKind::TyAlias,
-                    did,
-                ) if !self_is_hidden => {
-                    self.cx.renderinfo.get_mut().access_levels.map.insert(did, AccessLevel::Public);
-                }
-                Res::Def(DefKind::Mod, did) => {
-                    if !self_is_hidden {
-                        crate::visit_lib::LibEmbargoVisitor::new(self.cx).visit_mod(did);
+            if !self_is_hidden {
+                if let Res::Def(kind, did) = res {
+                    if kind == DefKind::Mod {
+                        crate::visit_lib::LibEmbargoVisitor::new(self.cx).visit_mod(did)
+                    } else {
+                        // All items need to be handled here in case someone wishes to link
+                        // to them with intra-doc links
+                        self.cx
+                            .renderinfo
+                            .get_mut()
+                            .access_levels
+                            .map
+                            .insert(did, AccessLevel::Public);
                     }
                 }
-                _ => {}
             }
-
             return false;
         }
 
         let res_hir_id = match res_did.as_local() {
-            Some(n) => tcx.hir().as_local_hir_id(n),
+            Some(n) => tcx.hir().local_def_id_to_hir_id(n),
             None => return false,
         };
 
@@ -377,8 +373,8 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
 
     fn visit_item(
         &mut self,
-        item: &'tcx hir::Item,
-        renamed: Option<ast::Ident>,
+        item: &'tcx hir::Item<'_>,
+        renamed: Option<Ident>,
         om: &mut Module<'tcx>,
     ) {
         debug!("visiting item {:?}", item);
@@ -406,7 +402,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     path: orig_name.map(|x| x.to_string()),
                     vis: &item.vis,
                     attrs: &item.attrs,
-                    whence: item.span,
+                    span: item.span,
                 })
             }
             hir::ItemKind::Use(_, hir::UseKind::ListStem) => {}
@@ -423,8 +419,8 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                 // anything as it will probably be stripped anyway.
                 if item.vis.node.is_pub() && self.inside_public_path {
                     let please_inline = item.attrs.iter().any(|item| match item.meta_item_list() {
-                        Some(ref list) if item.check_name(sym::doc) => {
-                            list.iter().any(|i| i.check_name(sym::inline))
+                        Some(ref list) if item.has_name(sym::doc) => {
+                            list.iter().any(|i| i.has_name(sym::inline))
                         }
                         _ => false,
                     });
@@ -448,7 +444,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     attrs: &item.attrs,
                     path,
                     glob: is_glob,
-                    whence: item.span,
+                    span: item.span,
                 });
             }
             hir::ItemKind::Mod(ref m) => {
@@ -480,7 +476,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     name: ident.name,
                     id: item.hir_id,
                     attrs: &item.attrs,
-                    whence: item.span,
+                    span: item.span,
                     vis: &item.vis,
                 };
                 om.typedefs.push(t);
@@ -491,7 +487,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     name: ident.name,
                     id: item.hir_id,
                     attrs: &item.attrs,
-                    whence: item.span,
+                    span: item.span,
                     vis: &item.vis,
                 };
                 om.opaque_tys.push(t);
@@ -504,7 +500,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     id: item.hir_id,
                     name: ident.name,
                     attrs: &item.attrs,
-                    whence: item.span,
+                    span: item.span,
                     vis: &item.vis,
                 };
                 om.statics.push(s);
@@ -519,7 +515,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                         id: item.hir_id,
                         name: ident.name,
                         attrs: &item.attrs,
-                        whence: item.span,
+                        span: item.span,
                         vis: &item.vis,
                     };
                     om.constants.push(s);
@@ -536,7 +532,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     bounds,
                     id: item.hir_id,
                     attrs: &item.attrs,
-                    whence: item.span,
+                    span: item.span,
                     vis: &item.vis,
                 };
                 om.traits.push(t);
@@ -548,7 +544,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     bounds,
                     id: item.hir_id,
                     attrs: &item.attrs,
-                    whence: item.span,
+                    span: item.span,
                     vis: &item.vis,
                 };
                 om.trait_aliases.push(t);
@@ -581,7 +577,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                         items,
                         attrs: &item.attrs,
                         id: item.hir_id,
-                        whence: item.span,
+                        span: item.span,
                         vis: &item.vis,
                     };
                     om.impls.push(i);
@@ -592,8 +588,8 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
 
     fn visit_foreign_item(
         &mut self,
-        item: &'tcx hir::ForeignItem,
-        renamed: Option<ast::Ident>,
+        item: &'tcx hir::ForeignItem<'_>,
+        renamed: Option<Ident>,
         om: &mut Module<'tcx>,
     ) {
         // If inlining we only want to include public functions.
@@ -607,15 +603,15 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             kind: &item.kind,
             vis: &item.vis,
             attrs: &item.attrs,
-            whence: item.span,
+            span: item.span,
         });
     }
 
     // Convert each `exported_macro` into a doc item.
     fn visit_local_macro(
         &self,
-        def: &'tcx hir::MacroDef,
-        renamed: Option<ast::Name>,
+        def: &'tcx hir::MacroDef<'_>,
+        renamed: Option<Symbol>,
     ) -> Macro<'tcx> {
         debug!("visit_local_macro: {}", def.ident);
         let tts = def.ast.body.inner_tokens().trees().collect::<Vec<_>>();
@@ -627,7 +623,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             def_id: self.cx.tcx.hir().local_def_id(def.hir_id).to_def_id(),
             attrs: &def.attrs,
             name: renamed.unwrap_or(def.ident.name),
-            whence: def.span,
+            span: def.span,
             matchers,
             imported_from: None,
         }

@@ -9,9 +9,25 @@ This option is deprecated and does nothing.
 
 ## code-model
 
-This option lets you choose which code model to use.
+This option lets you choose which code model to use. \
+Code models put constraints on address ranges that the program and its symbols may use. \
+With smaller address ranges machine instructions
+may be able to use more compact addressing modes.
 
-To find the valid options for this flag, run `rustc --print code-models`.
+The specific ranges depend on target architectures and addressing modes available to them. \
+For x86 more detailed description of its code models can be found in
+[System V Application Binary Interface](https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf)
+specification.
+
+Supported values for this option are:
+
+- `tiny` - Tiny code model.
+- `small` - Small code model. This is the default model for majority of supported targets.
+- `kernel` - Kernel code model.
+- `medium` - Medium code model.
+- `large` - Large code model.
+
+Supported values can also be discovered by running `rustc --print code-models`.
 
 ## codegen-units
 
@@ -25,6 +41,18 @@ generated code, but may be slower to compile.
 
 The default value, if not specified, is 16 for non-incremental builds. For
 incremental builds the default is 256 which allows caching to be more granular.
+
+## control-flow-guard
+
+This flag controls whether LLVM enables the Windows [Control Flow
+Guard](https://docs.microsoft.com/en-us/windows/win32/secbp/control-flow-guard)
+platform security feature. This flag is currently ignored for non-Windows targets.
+It takes one of the following values:
+
+* `y`, `yes`, `on`, `checks`, or no value: enable Control Flow Guard.
+* `nochecks`: emit Control Flow Guard metadata without runtime enforcement checks (this
+should only be used for testing purposes as it does not provide security enforcement).
+* `n`, `no`, `off`: do not enable Control Flow Guard (the default).
 
 ## debug-assertions
 
@@ -60,6 +88,42 @@ It takes one of the following values:
 For example, for gcc flavor linkers, this issues the `-nodefaultlibs` flag to
 the linker.
 
+## embed-bitcode
+
+This flag controls whether or not the compiler embeds LLVM bitcode into object
+files. It takes one of the following values:
+
+* `y`, `yes`, `on`, or no value: put bitcode in rlibs (the default).
+* `n`, `no`, or `off`: omit bitcode from rlibs.
+
+LLVM bitcode is required when rustc is performing link-time optimization (LTO).
+It is also required on some targets like iOS ones where vendors look for LLVM
+bitcode. Embedded bitcode will appear in rustc-generated object files inside of
+a section whose name is defined by the target platform. Most of the time this is
+`.llvmbc`.
+
+The use of `-C embed-bitcode=no` can significantly improve compile times and
+reduce generated file sizes if your compilation does not actually need bitcode
+(e.g. if you're not compiling for iOS or you're not performing LTO). For these
+reasons, Cargo uses `-C embed-bitcode=no` whenever possible. Likewise, if you
+are building directly with `rustc` we recommend using `-C embed-bitcode=no`
+whenever you are not using LTO.
+
+If combined with `-C lto`, `-C embed-bitcode=no` will cause `rustc` to abort
+at start-up, because the combination is invalid.
+
+> **Note**: if you're building Rust code with LTO then you probably don't even
+> need the `embed-bitcode` option turned on. You'll likely want to use
+> `-Clinker-plugin-lto` instead which skips generating object files entirely and
+> simply replaces object files with LLVM bitcode. The only purpose for
+> `-Cembed-bitcode` is when you're generating an rlib that is both being used
+> with and without LTO. For example Rust's standard library ships with embedded
+> bitcode since users link to it both with and without LTO.
+>
+> This also may make you wonder why the default is `yes` for this option. The
+> reason for that is that it's how it was for rustc 1.44 and prior. In 1.45 this
+> option was added to turn off what had always been the default.
+
 ## extra-filename
 
 This option allows you to put extra data in each output filename. It takes a
@@ -77,6 +141,18 @@ values:
 
 The default behaviour, if frame pointers are not force-enabled, depends on the
 target.
+
+## force-unwind-tables
+
+This flag forces the generation of unwind tables. It takes one of the following
+values:
+
+* `y`, `yes`, `on`, or no value: Unwind tables are forced to be generated.
+* `n`, `no`, or `off`: Unwind tables are not forced to be generated. If unwind
+  tables are required by the target or `-C panic=unwind`, an error will be
+  emitted.
+
+The default if not specified depends on the target.
 
 ## incremental
 
@@ -124,6 +200,18 @@ the following values:
 An example of when this flag might be useful is when trying to construct code coverage
 metrics.
 
+## link-self-contained
+
+On targets that support it this flag controls whether the linker will use libraries and objects
+shipped with Rust instead or those in the system.
+It takes one of the following values:
+
+* no value: rustc will use heuristic to disable self-contained mode if system has necessary tools.
+* `y`, `yes`, `on`: use only libraries/objects shipped with Rust.
+* `n`, `no`, or `off`: rely on the user or the linker to provide non-Rust libraries/objects.
+
+This allows overriding cases when detection fails or user wants to use shipped libraries.
+
 ## linker
 
 This flag controls which linker `rustc` invokes to link your code. It takes a
@@ -166,6 +254,18 @@ the following values:
 * `y`, `yes`, `on`, or no value: enable linker plugin LTO.
 * `n`, `no`, or `off`: disable linker plugin LTO (the default).
 * A path to the linker plugin.
+
+More specifically this flag will cause the compiler to replace its typical
+object file output with LLVM bitcode files. For example an rlib produced with
+`-Clinker-plugin-lto` will still have `*.o` files in it, but they'll all be LLVM
+bitcode instead of actual machine code. It is expected that the native platform
+linker is capable of loading these LLVM bitcode files and generating code at
+link time (typically after performing optimizations).
+
+Note that rustc can also read its own object files produced with
+`-Clinker-plugin-lto`. If an rlib is only ever going to get used later with a
+`-Clto` compilation then you can pass `-Clinker-plugin-lto` to speed up
+compilation and avoid generating object files that aren't used.
 
 ## llvm-args
 
@@ -319,11 +419,46 @@ to a valid `.profdata` file. See the chapter on
 
 ## relocation-model
 
-This option lets you choose which
-[relocation](https://en.wikipedia.org/wiki/Relocation_\(computing\)) model to
-use.
+This option controls generation of
+[position-independent code (PIC)](https://en.wikipedia.org/wiki/Position-independent_code).
 
-To find the valid options for this flag, run `rustc --print relocation-models`.
+Supported values for this option are:
+
+#### Primary relocation models
+
+- `static` - non-relocatable code, machine instructions may use absolute addressing modes.
+
+- `pic` - fully relocatable position independent code,
+machine instructions need to use relative addressing modes.  \
+Equivalent to the "uppercase" `-fPIC` or `-fPIE` options in other compilers,
+depending on the produced crate types.  \
+This is the default model for majority of supported targets.
+
+#### Special relocation models
+
+- `dynamic-no-pic` - relocatable external references, non-relocatable code.  \
+Only makes sense on Darwin and is rarely used.  \
+If StackOverflow tells you to use this as an opt-out of PIC or PIE, don't believe it,
+use `-C relocation-model=static` instead.
+- `ropi`, `rwpi` and `ropi-rwpi` - relocatable code and read-only data, relocatable read-write data,
+and combination of both, respectively.  \
+Only makes sense for certain embedded ARM targets.
+- `default` - relocation model default to the current target.  \
+Only makes sense as an override for some other explicitly specified relocation model
+previously set on the command line.
+
+Supported values can also be discovered by running `rustc --print relocation-models`.
+
+#### Linking effects
+
+In addition to codegen effects, `relocation-model` has effects during linking.
+
+If the relocation model is `pic` and the current target supports position-independent executables
+(PIE), the linker will be instructed (`-pie`) to produce one.  \
+If the target doesn't support both position-independent and statically linked executables,
+then `-C target-feature=+crt-static` "wins" over `-C relocation-model=pic`,
+and the linker is instructed (`-static`) to produce a statically linked
+but not position-independent executable.
 
 ## remark
 
@@ -369,7 +504,15 @@ machine. Each target has a default base CPU.
 
 Individual targets will support different features; this flag lets you control
 enabling or disabling a feature. Each feature should be prefixed with a `+` to
-enable it or `-` to disable it. Separate multiple features with commas.
+enable it or `-` to disable it.
+
+Features from multiple `-C target-feature` options are combined. \
+Multiple features can be specified in a single option by separating them
+with commas - `-C target-feature=+x,-y`. \
+If some feature is specified more than once with both `+` and `-`,
+then values passed later override values passed earlier. \
+For example, `-C target-feature=+x,-y,+z -Ctarget-feature=-x,+y`
+is equivalent to `-C target-feature=-x,+y,+z`.
 
 To see the valid options and an example of use, run `rustc --print
 target-features`.
@@ -386,26 +529,6 @@ This also supports the feature `+crt-static` and `-crt-static` to control
 
 Each target and [`target-cpu`](#target-cpu) has a default set of enabled
 features.
-
-## bitcode-in-rlib
-
-This flag controls whether or not the compiler puts compressed LLVM bitcode
-into generated rlibs. It takes one of the following values:
-
-* `y`, `yes`, `on`, or no value: put bitcode in rlibs (the default).
-* `n`, `no`, or `off`: omit bitcode from rlibs.
-
-LLVM bitcode is only needed when link-time optimization (LTO) is being
-performed, but it is enabled by default for backwards compatibility reasons.
-
-The use of `-C bitcode-in-rlib=no` can significantly improve compile times and
-reduce generated file sizes. For these reasons, Cargo uses `-C
-bitcode-in-rlib=no` whenever possible. Likewise, if you are building directly
-with `rustc` we recommend using `-C bitcode-in-rlib=no` whenever you are not
-using LTO.
-
-If combined with `-C lto`, `-C bitcode-in-rlib=no` will cause `rustc` to abort
-at start-up, because the combination is invalid.
 
 [option-emit]: ../command-line-arguments.md#option-emit
 [option-o-optimize]: ../command-line-arguments.md#option-o-optimize
